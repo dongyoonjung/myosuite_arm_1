@@ -1,5 +1,7 @@
 # GRILL 인계 문서 — myoArm 어깨거상 프로젝트
 
+> ⚠️ **구버전 주의 (2026-06-11):** 이 문서는 **grill 설계단계(2026-06-10) 스냅샷**이다. 이후 일부 결정이 데이터 실측으로 **뒤집혔다** — 예: ⓐ KIMHu에 **JointOrientations(쿼터니언) 존재**("Position만/orientation 없음"은 *오류*), ⓑ **pro_sup = 저가중 추적 신호 DoF**(압핀 철회, PT·PQ 유지), ⓒ **shoulder_rot = 저가중 자유·참조 없음**(압핀 철회), ⓓ C/B 등 OPEN 큐는 전부 LOCKED 완료. **현재 유효 결정·상태는 항상 `DESIGN.md`(정본)와 `SESSION_LOG.md`(진행상태)를 신뢰**할 것. 이 문서는 설계 *맥락/서사* 참고용으로만.
+
 > **이 문서의 용도:** `myosuite_elbow_basic`에서 시작된 grill-me 설계 인터뷰를 이 폴더(`myosuite_arm_1`)에서 *이어서* 진행하기 위한 완전 인계 브리프. 새 세션은 이 문서 + `DESIGN.md` + 자동로드 메모리(`arm-datagen-design.md`)를 읽고 **아래 "열린 결정 큐"의 C부터** grill을 재개하면 된다.
 > **재개법:** `~/projects/myosuite_arm_1/`에서 Claude 실행 → 팔 메모리 자동로드 → `/grill-me`로 C 질문부터. 진행방식: 한 번에 한 질문, 매 질문에 추천답 제시, 코드/데이터로 답할 수 있으면 탐색.
 

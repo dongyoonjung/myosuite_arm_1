@@ -63,12 +63,30 @@ reward = TASK_track · QUALITY + w_e·EFFORT + penalties
 ## 데이터
 
 ### KIMHu (1차, `data/kimhu/`, CC0/CC-BY)
-- ScienceDB DOI 10.57760/sciencedb.01902. 20명(오른팔), 2테스트×10반복, 6s휴식, **속도 미지시(self-paced)**. Kinect V2 30fps 25관절 **Position + JointOrientations(쿼터니언) 둘 다 존재**(과거 "orientation 없음" 전제 *오류 정정*). 단 축회전(roll) 신뢰도는 관절마다 다름: pro_sup은 위치기하와 교차검증돼 신뢰(상관 +0.56~+0.77), shoulder_rot(어깨 roll)은 교차검증 불가→불신. + EMG 1500Hz 4채널(ECU,FCU,Biceps,**Deltoideus Medius**). EMG에 20마커(반복 start/end 쌍).
+- ScienceDB DOI 10.57760/sciencedb.01902. 20명(오른팔), 2테스트×10반복, 반복간 휴식 **~3.5–5s 실측**('6s'는 근사·선행지식), **속도 미지시(self-paced)**. Kinect V2 30fps 25관절 **Position + JointOrientations(쿼터니언) 둘 다 존재**(과거 "orientation 없음" 전제 *오류 정정*). 단 축회전(roll) 신뢰도는 관절마다 다름: pro_sup은 위치기하와 교차검증돼 신뢰(상관 +0.56~+0.77), shoulder_rot(어깨 roll)은 교차검증 불가→불신. + EMG 1500Hz 4채널(ECU,FCU,Biceps,**Deltoideus Medius**). EMG에 20마커(반복 start/end 쌍).
 - **T1=관상**: 외전→팔꿈치 머리로→신전→손목(굴/중/신)→rest. **T2=횡단**: 외전→팔꿈치굽혀 손목 가슴앞→손목→rest. 둘 다 복합시퀀스 → **외전구간 [shoulder_elv + elbow]만 사용**.
 - 실측(MAYR02): T1 shoulder_elv 6→107°·평면az~3°; T2 6→103°·az~45°(앞). elbow T1 스파이크~115°/T2 지속~120°. T 중앙 2.4s(1.6–4.6), skew~0.35. → **2 실재평면(0°,45°), 순수시상면(90°)은 sim 설계 필요**.
 - 손목 잠그면 EMG ECU/FCU(손목근) 무관 → **유효 EMG = 중삼각근(거상)·이두(팔꿈치) 2채널뿐**.
 - skeleton(150s)↔EMG(160s) **~6s 클럭오프셋** → 정밀동기 `*_summary.csv` 필요.
 - 포맷: skeleton CSV 세미콜론구분, col10=BodyInfoJson(Joints.<name>.Position.XYZ 미터), col2-7=사전계산각(law-of-cosines). 다운로드: 비이미지 1.5GB만 (이미지 287GB 제외). 매니페스트 `scidb.cn/api/sdb-filetree-service/getAllUrl?dataSetId=2f68a8f8377b41aba79ce53104dc3ca6&version=V2`, 파일별 `download.scidb.cn/download?fileId=<id>`.
+
+#### KIMHu 프로토콜 명세 (T1/T2) — 관측(데이터) vs 추론(선행지식)
+M0 조사 워크플로(실데이터 직접 적재)로 확정. **데이터셋 자체 프로토콜 문서는 레포에 없음**(README/PDF/논문 부재) → 아래는 *데이터 파일에서 직접 계산·확인한 값*(관측)과 *외부근거 필요한 선행지식*(추론)을 구분 기재. 부하·동작서술을 발명하지 않기 위함.
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| 피험자 | 20명, 전원 오른팔 | **관측**: anthropometric_information_participants.json(20), 과제폴더 40, Skeleton_Tracking_Count.csv(40행) |
+| 반복 | 과제당 10회/인 | **관측**: EMG 마커 20=10쌍/파일, 상승분절 중앙 10 |
+| 휴식 | 반복간 ~3.5–5s | **관측**(MAYR02 EMG 마커 간격). '6s'=선행지식·근사 |
+| 속도 | 미지시(self-paced) | 선행지식. 관측 T분포와 정합(T1 중앙 2.08s / T2 2.53s) |
+| 센서 | Kinect V2, 25관절, Position+쿼터니언, 유효 ~29.9fps | **관측**: BodyInfoJson, TimeStamp |
+| EMG | Noraxon 1500Hz 4ch: ECU·FCU·Biceps·**중삼각근** | **관측**: *_emg_data.mat channelNames |
+| **부하** | **없음(확정)** | **관측**: data/ 전체 load/dumbbell/object 키워드 0(본인 체중 컬럼만); EMG Activities={Begin,Pause}; 손 object 추적 없음 |
+| **T1 = 관상면** | 외전(측면거상)→팔꿈치 머리로→신전→손목(굴/중/신)→rest. 평면 az **~7°**(거의 관상), 거상정점 중앙 **~95°**, elbow정점 ~122° | 각도=**관측**(latent_T1.json, plane_nominal 7.09°). 동작 문구=선행/운동학 추론(데이터셋 명문 아님) |
+| **T2 = 횡단/전방** | 외전/거상→팔꿈치 굽혀 손 가슴앞(수평내전)→손목→rest. 평면 az 코호트 **~13.5°**(개별 전방국면 +45°까지, p95=45° max=63°), 거상정점 중앙 **~87°**, elbow정점 ~111° | 각도=**관측**(latent_T2.json). 동작 문구=선행/추론 |
+
+- **사용 구간**: 둘 다 복합시퀀스 → **상승(외전) 구간 [shoulder_elv + elbow]만** 사용(정점 뒤 손목조작=채널 오염). T2는 결정(b)로 전방 가슴앞 국면까지 분절 확장 → 평면을 스칼라→*궤적*화.
+- **라벨 주의**: T1/T2='관상'/'횡단'은 관측 평면각과 정합하나 데이터셋이 문자 그대로 명명한 건 아님(폴더명은 `<ID> T1`/`<ID> T2`). DOI도 파일로 존재하지 않는 선행지식.
 
 ### U-Limb (참고, `data/ulimb_mhh/`)
 - Harvard Dataverse, MHH 센터(건강 20, Vicon 마커+EMG). 속도분포 참고용. ADL 제스처라 표준 아님(거상 41–88° 제멋대로). `MHH.rar` 2GB + 추출.
@@ -91,6 +109,7 @@ reward = TASK_track · QUALITY + w_e·EFFORT + penalties
 
 ## 미해결 (OPEN)
 - **A. latent 인코더/참조** — A1 LOCKED. **M0 구현 완료**(`references/`): kimhu_io(3D 유도·col4 가드)·segment(상승/전방 분절)·build_templates(정규화·로버스트풀·latent fit·plane 궤적)·warp(런타임 참조). 산출 `references/out/`.
+  - **M0 검증(viz·유사도, 2026-06-11 조사 워크플로)**: ①plane 급변=**저거상 방위각 노이즈**(팔 수직→수평성분 작아 arctan2 정의불량; plane_mag<0.13서 중앙편차 ~38°) + 일부 반복 **Kinect 흔들림**(MAYR02 등 1/20) → `kimhu_io.reliable_plane`(마스킹·보간) + 표시 시 **대표(최단조) 반복** 선택. 템플릿은 코호트 평균이라 이미 단조(편차 0°)·무영향(npz 재생성 불필요). ②**shoulder_rot 참조 없음 재확인**: naive 쿼터니언=짐벌 불안정, *제대로* 푼 swing-twist조차 elbow_flexion과 **~0.84 교란**(전완 운반을 측정, 고립 축회전 아님) → Kinect로 고립 축회전 측정 불가 → 참조 생성=발명(기각). 물리가 외회전 공급(LOCKED 유지). ③**processed↔generated 시퀀스 유사도** = **DTW(주, 순수 numpy DP)+NRMSE·Pearson r(보조)**(`references/similarity.py`). 실측: elev DTW~0.01–0.04(r≥+0.9 대부분), plane DTW~0.02–0.07. 산출 `similarity_proc_vs_gen.png`·`shoulder_axes_pipeline.png`.
 - **E. GCP 인프라** ← 다음. MuJoCo CPU·PPO 소형망, 다코어 spot VM, GCS 버킷. 규모=배터리(T1+T2)·행동공간(26근)이 정함.
 - **G. 식별모델(회귀)** — **시뮬레이션 데이터 나온 뒤 진행**(M4 후). 구조(MLP-FUSED 계승), 특징=ACT 주채널+KIN 보조+known latent 공변량, 약화정도별 재가중, 시계열 vs 스냅샷.
 

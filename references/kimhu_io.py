@@ -143,3 +143,24 @@ def weighted_circmean(az_deg, weights):
     c = np.sum(weights * np.cos(ar))
     s = np.sum(weights * np.sin(ar))
     return float(np.degrees(np.arctan2(s, c)))
+
+
+# 방위각 신뢰 하한(실측, M0 조사): 팔이 수직에 가까우면 수평성분이 작아 arctan2 방위각이
+# 정의 불량 — plane_mag<0.13에서 중앙 편차 ~38°, <0.16에서 프레임 55%↑가 30°↑ 빗나감.
+PLANE_MAG_FLOOR = 0.13
+
+
+def reliable_plane(plane_az, plane_mag, floor=PLANE_MAG_FLOOR):
+    """저신뢰 방위각 정리(단일 반복 표시·시퀀스 유사도 비교용).
+
+    plane_mag<floor(팔 거의 수직) 샘플을 마스킹하고 신뢰 샘플에서 선형보간(끝은 carry)으로
+    메운다. 거상 구간에서 az는 ~[0,90]°라 wrap 없음 → 선형보간 안전.
+    ★ 템플릿(build_templates)은 코호트 평균이라 이미 단조·깨끗(편차 0°) → 거기엔 불필요.
+    """
+    az = np.asarray(plane_az, float).copy()
+    good = np.asarray(plane_mag, float) >= floor
+    if good.sum() < 2:
+        return az
+    i = np.arange(len(az))
+    az[~good] = np.interp(i[~good], i[good], az[good])
+    return az
