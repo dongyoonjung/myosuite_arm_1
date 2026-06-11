@@ -1,0 +1,44 @@
+=== G(seq) TCN: channels=all stride=2 ===
+  ep10: val MAE 0.0520
+  ep20: val MAE 0.0475
+  ep30: val MAE 0.0395
+  ep40: val MAE 0.0380
+  ep50: val MAE 0.0368
+  ep60: val MAE 0.0355
+  ep70: val MAE 0.0349
+  ep80: val MAE 0.0356
+  ep90: val MAE 0.0348
+  ep100: val MAE 0.0347
+  ep110: val MAE 0.0346
+  ep120: val MAE 0.0347
+
+=== 채널별 식별성 (s_F: Fmax scale) — 시계열 회귀 ===
+채널               MAE      R²  해석
+DELT1          0.030    0.81  강식별
+DELT2          0.044    0.61  강식별
+DELT3          0.057    0.41  부분
+SUPSP          0.050    0.55  부분
+PECM1          0.057    0.40  부분
+CORB           0.068    0.29  약식별
+BIClong        0.034    0.78  강식별
+TRIlong        0.046    0.60  부분
+A_lowcuff      0.028    0.83  강식별
+B_latadd       0.064    0.26  약식별
+W_ext          0.038    0.75  강식별
+W_flex         0.035    0.74  강식별
+  s_F 평균 R² 0.587
+=== s_L (Lopt scale) ===
+DELT1          0.023    0.37
+DELT2          0.025    0.15
+DELT3          0.026    0.12
+SUPSP          0.021    0.39
+PECM1          0.024    0.25
+CORB           0.028   -0.04
+BIClong        0.019    0.50
+TRIlong        0.022    0.40
+A_lowcuff      0.025    0.18
+B_latadd       0.023    0.41
+W_ext          0.020    0.38
+W_flex         0.023    0.26
+  s_L 평균 R² 0.281
+saved: models/regressor_wrist_mix.pt
