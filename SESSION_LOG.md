@@ -6,13 +6,25 @@
 
 ---
 
-## 0. 한 눈에 — 현재 상태 (2026-06-11)
-- **단계: M0~M4 + G 전 단계 ✅ 완료. 파이프라인 닫힘.**
-- **핵심 결과(G 회귀)**: 20k 롤아웃 → 근육별 Fmax scale(s_F) 복원 **ACT만 평균 R² 0.90·KIN만 0.36·전체 0.92**, 공변량만 ≈0(누수없음). 전 채널 강식별(R² 0.80–0.97). DESIGN "ACT 주채널·KIN 보너스" 실증.
-- M1(정점98°)·M2(T1 peakErr3°·T2 5°)·M3(약화→ACT보상/KIN이탈 graded). 모델 `ppo_arm_{T1,M2a,M2b,M3a,M3b}.zip`·`regressor_G.pt`. 데이터 `data/sim/train.npz`.
-- crawl-walk warm-start: M1(T1고정)→M2a(T1분포)→M2b(+T2)→M3a(섭동k=1)→M3b(k≤3). obs 76 불변. 학습 이 머신(32코어) 직접.
-- 보고서 `PROGRESS_REPORT_2026-06-11.md` + 그림 `results/report/fig1~5`·비디오 `M1_T1.mp4`. 코드: `custom_envs/`·`train.py`·`diagnostics/{gate,signal}.py`·`gen_data.py`·`regress_nn.py`·`tools/`.
-- 핵심 결정 전부 LOCKED(DESIGN.md). 정체성: **근골격 파라미터(per-muscle Fmax/Lopt scale) 추정(회귀) 개발**. T1/T2는 *고정 입력*이지 식별성 끌어올리는 튜닝 손잡이가 아님. 목표 = sim 내부 식별성(sim-to-real 아님), 파라미터 ground truth는 sim 전용.
+## 0. 한 눈에 — 현재 상태 (2026-06-11, 최신)
+- **전 파이프라인(M0~M4+G) 완료 + 방법론 개정(참조생성·KIN-only·운동노이즈·손목해제 탐색)까지 완료.**
+- **정체성(불변)**: myoArm 근육 파라미터(per-muscle Fmax/Lopt scale) 추정(회귀) 개발. sim 내부 식별성(sim-to-real 아님). 정답은 sim 전용. RL은 모방대상(참조)을 *soft 추적*; 약화가 ACT 보상 또는 KIN 이탈로 드러남.
+- **현재 유효 설정(사용자 방향 반영)**:
+  - **참조(track 대상) 생성 = fPCA/ProMP**(`references/fpca_ref.py`·`fpca_full_ref.py`). warp(평균+1PC)→VAE→**fPCA** 발전; fPCA가 실제 분포 충실(under-dispersion 없음).
+  - **식별 입력 = 운동학(KIN)만**(EMG/ACT 사용 안 함). 시계열 회귀(TCN, `regress_seq.py`)가 요약통계(스냅샷)보다 우월.
+  - **운동노이즈**(Harris–Wolpert, env `motor_noise`) 적용. 진단1(privileged 제거)은 미적용(만성환자=CNS 적응).
+- **핵심 결과 (KIN-only, fPCA 참조, 운동노이즈)**:
+  | 설정 | 어깨/팔꿈치 s_F R² | 손목근 R² |
+  |---|---|---|
+  | rise, T1+T2, 손목잠금 | **0.81** | — |
+  | full-seq, 손목해제, T1 | 0.60 | 0.81 |
+  | full-seq, 손목해제, T1+T2 | 0.55 | 0.74 |
+  → **EMG 없이 움직임만으로 어깨/팔꿈치 강식별(0.81, rise·손목잠금)**. 손목 해제+full-seq는 손목근 식별 추가하나 어깨/팔꿈치 희석(거상-rise가 최정보 구간). 트레이드오프.
+- **모델**: `ppo_arm_{T1,M2a,M2b,M3a,M3b}`(ACT시대), `ppo_arm_M3v`(VAE참조·노이즈), `ppo_arm_wrist`/`ppo_arm_wrist_mix`(손목해제). 회귀 `regressor_{G,seqG,kinvae,wrist,wrist_mix}.pt`. 생성기 `out/{fpca,fpcafull,vae}_*`.
+- **보고서**: `REPORT_technical_2026-06-11.md`(엄밀·수식), `PROGRESS_REPORT_2026-06-11.md`(서사·§9 방법론개정), `보고서_쉬운설명_*.docx`·`보고서_myoArm_*.docx`. 그림 `results/report/fig1~11`, 비디오 `M1_T1.mp4`.
+- 학습은 이 머신(32코어 cloud VM) 직접. KIMHu 원시는 추출 후 삭제(재다운로드 `tools/download_kimhu.py`).
+
+> ⚠️ **결정 변경 주의**: DESIGN.md는 *초기* 설계(참조=warp, 입력=ACT주채널). 이후 사용자 방향으로 **참조=fPCA, 입력=KIN-only**로 개정됨. 최신 유효 = 본 0절 + `REPORT_technical`/`PROGRESS_REPORT §9`.
 
 ## 1. 이번 세션 한 일 (2026-06-11)
 어깨 3축 파이프라인 플롯(raw→가공→생성)의 의문점에서 출발 → 진단·수정 + 시퀀스 유사도 측정 도입 + KIMHu 프로토콜 문서화. **모두 시각화/검증/문서 작업이며, 데이터 생성 로직(템플릿/warp)은 정상으로 확인되어 변경 없음.**
