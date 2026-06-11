@@ -74,12 +74,17 @@ class TCN(nn.Module):
         return self.head(z)
 
 
-def load(path, channels="all", stride=2):
+def load(path, channels="all", stride=2, drop_err=False):
     d = np.load(path, allow_pickle=True)
     seq = d["seq"].astype(np.float32)                       # (N,T,C)
+    names = [str(n) for n in d["channel_names"]] if "channel_names" in d else None
     if stride > 1:
         seq = seq[:, ::stride, :]
     seq = select_channels(seq, channels)
+    if drop_err and names is not None and channels == "all" and seq.shape[2] == len(names):
+        keep = [i for i, n in enumerate(names) if not n.startswith("err_")]   # 추적오차 제외(참조 누수 차단)
+        seq = seq[:, :, keep]
+        print(f"  [drop_err] err 채널 제외 → KIN {seq.shape[2]}채널({[names[i] for i in keep]})")
     length = np.ceil(d["length"].astype(np.float32) / stride).astype(np.int32)
     cov = d["cov"].astype(np.float32)
     y = np.concatenate([d["y_sF"], d["y_sL"]], 1).astype(np.float32)
@@ -101,9 +106,9 @@ def standardize(seq, length, stats=None):
 
 
 def train(data, channels="all", stride=2, epochs=80, bs=256, lr=1e-3,
-          reweight=True, seed=0, threads=16):
+          reweight=True, seed=0, threads=16, drop_err=False):
     torch.manual_seed(seed); torch.set_num_threads(threads)
-    seq, length, cov, y = load(data, channels, stride)
+    seq, length, cov, y = load(data, channels, stride, drop_err=drop_err)
     seqn, mask, seq_stats = standardize(seq, length)
     cmu, csd = cov.mean(0), cov.std(0) + 1e-6
     covn = (cov - cmu) / csd
@@ -177,10 +182,11 @@ def main():
     ap.add_argument("--epochs", type=int, default=80)
     ap.add_argument("--threads", type=int, default=16)
     ap.add_argument("--out", default="models/regressor_seqG.pt")
+    ap.add_argument("--no-err", action="store_true")   # 추적오차 채널 제외(참조 누수 차단)
     a = ap.parse_args()
-    print(f"=== G(seq) TCN: channels={a.channels} stride={a.stride} ===")
+    print(f"=== G(seq) TCN: channels={a.channels} stride={a.stride} no_err={a.no_err} ===")
     model, val, stats = train(a.data, channels=a.channels, stride=a.stride,
-                              epochs=a.epochs, threads=a.threads)
+                              epochs=a.epochs, threads=a.threads, drop_err=a.no_err)
     report(model, val)
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     torch.save({"state": model.state_dict()}, a.out)
