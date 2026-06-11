@@ -27,3 +27,8 @@ models/checkpoints/
 
 # MuJoCo 렌더 로그
 MUJOCO_LOG.TXT
+
+# LaTeX aux
+*.aux
+*.out
+*.synctex.gz
