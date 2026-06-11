@@ -148,7 +148,7 @@ def main():
     ap.add_argument("--curriculum-k", default="1,2,3")          # M3 손상근 수 후보
     ap.add_argument("--curriculum-w", default="0.5,0.3,0.2")    # 가중
     ap.add_argument("--motor-noise", type=float, default=0.0)   # 신호의존 운동노이즈 σ_sd
-    ap.add_argument("--ref-gen", default="warp")                # warp | vae | fpca
+    ap.add_argument("--ref-gen", default="warp")                # warp | fpca (vae 기각·제거)
     ap.add_argument("--wrist", action="store_true")             # 손목 해제(T1 full-seq, 32근)
     ap.add_argument("--horizon", type=float, default=3.5)       # 에피소드 길이(full-seq는 4.0+)
     a = ap.parse_args()

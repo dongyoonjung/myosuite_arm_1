@@ -24,7 +24,6 @@ from gymnasium import spaces
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from references import warp
-from references import vae_ref
 from references import fpca_ref
 from custom_envs import muscle_groups as MG
 
@@ -95,7 +94,7 @@ class ArmPerturbEnv(gym.Env):
             ref_gen = "fpca_full"
             self._refmod = fpca_full_ref
         else:
-            self._refmod = {"vae": vae_ref, "fpca": fpca_ref}.get(ref_gen, warp)
+            self._refmod = {"fpca": fpca_ref}.get(ref_gen, warp)   # 기본 warp, 채택 fpca (vae 기각·제거)
         self.ref_gen = ref_gen
         self.task_mode = task               # 'T1' | 'T2' | 'mix'
         self.tasks = ["T1", "T2"] if task == "mix" else [task]
