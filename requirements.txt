@@ -1,0 +1,10 @@
+# 고정 버전 — 환경 재현성(Docker·VM). torch는 CPU 빌드.
+# torch CPU 설치: pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+myosuite==2.11.6
+gymnasium==0.29.1
+mujoco==3.3.0
+stable-baselines3==2.7.1
+numpy
+scipy
+matplotlib
+pandas
