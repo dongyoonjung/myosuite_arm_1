@@ -24,7 +24,7 @@ CKPT = os.path.join(MODELS, "checkpoints")
 def make_env_fn(task, latent_mode, perturb, rsi, seed, act_lowpass=0.0,
                 effort_pow=2, reward_cfg=None, frame_skip=10,
                 curriculum_k=(1, 2, 3), curriculum_w=(0.5, 0.3, 0.2), motor_noise=0.0,
-                ref_gen="warp"):
+                ref_gen="warp", wrist=False, horizon_s=3.5):
     def _f():
         from custom_envs.arm_perturb_v0 import ArmPerturbEnv
         e = ArmPerturbEnv(task=task, latent_mode=latent_mode, perturb=perturb,
@@ -32,7 +32,7 @@ def make_env_fn(task, latent_mode, perturb, rsi, seed, act_lowpass=0.0,
                           effort_pow=effort_pow, reward_cfg=reward_cfg,
                           frame_skip=frame_skip, curriculum_k=curriculum_k,
                           curriculum_k_weights=curriculum_w, motor_noise=motor_noise,
-                          ref_gen=ref_gen)
+                          ref_gen=ref_gen, wrist=wrist, horizon_s=horizon_s)
         return e
     return _f
 
@@ -48,7 +48,8 @@ class GateCallback:
 
 
 def build_gate_callback(task, model_getter, train_vn, every=250_000, n_eps=3,
-                        frame_skip=10, sample_latent=False, ref_gen="warp"):
+                        frame_skip=10, sample_latent=False, ref_gen="warp",
+                        wrist=False, horizon_s=3.5):
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
     from custom_envs.arm_perturb_v0 import ArmPerturbEnv
@@ -63,7 +64,8 @@ def build_gate_callback(task, model_getter, train_vn, every=250_000, n_eps=3,
         def _make_eval(self):
             def mk():
                 e = ArmPerturbEnv(task=eval_task, latent_mode="fixed", perturb=False,
-                                  rsi=False, frame_skip=frame_skip, ref_gen=ref_gen)
+                                  rsi=False, frame_skip=frame_skip, ref_gen=ref_gen,
+                                  wrist=wrist, horizon_s=horizon_s)
                 e.set_eval(True, sample_latent=sample_latent)
                 return e
             venv = DummyVecEnv([mk])
@@ -146,7 +148,9 @@ def main():
     ap.add_argument("--curriculum-k", default="1,2,3")          # M3 손상근 수 후보
     ap.add_argument("--curriculum-w", default="0.5,0.3,0.2")    # 가중
     ap.add_argument("--motor-noise", type=float, default=0.0)   # 신호의존 운동노이즈 σ_sd
-    ap.add_argument("--ref-gen", default="warp")                # warp | vae(KIMHu 궤적 생성모델)
+    ap.add_argument("--ref-gen", default="warp")                # warp | vae | fpca
+    ap.add_argument("--wrist", action="store_true")             # 손목 해제(T1 full-seq, 32근)
+    ap.add_argument("--horizon", type=float, default=3.5)       # 에피소드 길이(full-seq는 4.0+)
     a = ap.parse_args()
     cur_k = tuple(int(x) for x in a.curriculum_k.split(","))
     cur_w = tuple(float(x) for x in a.curriculum_w.split(","))
@@ -164,7 +168,7 @@ def main():
                            act_lowpass=a.act_lowpass, effort_pow=a.effort_pow,
                            reward_cfg=reward_cfg, frame_skip=a.frame_skip,
                            curriculum_k=cur_k, curriculum_w=cur_w, motor_noise=a.motor_noise,
-                           ref_gen=a.ref_gen)
+                           ref_gen=a.ref_gen, wrist=a.wrist, horizon_s=a.horizon)
                for i in range(a.n_envs)]
     venv = SubprocVecEnv(env_fns, start_method="spawn")
     if a.vecnorm and os.path.exists(a.vecnorm):
@@ -198,7 +202,8 @@ def main():
                                  save_vecnormalize=True)
     gate_cb = build_gate_callback(a.task, lambda: model, venv,
                                   every=a.gate_every, n_eps=4, frame_skip=a.frame_skip,
-                                  sample_latent=(a.latent_mode == "sample"), ref_gen=a.ref_gen)
+                                  sample_latent=(a.latent_mode == "sample"), ref_gen=a.ref_gen,
+                                  wrist=a.wrist, horizon_s=a.horizon)
 
     model.learn(total_timesteps=a.timesteps, callback=[ckpt_cb, gate_cb],
                 tb_log_name=a.out, progress_bar=False)

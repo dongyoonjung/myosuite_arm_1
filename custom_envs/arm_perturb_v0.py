@@ -49,17 +49,20 @@ def _find_xml():
 _MODEL_CACHE = {}
 
 
-def build_locked_model(xml=None, cache=True):
-    """원위 22관절을 equality 상수잠금한 myoArm MjModel.
+def build_locked_model(xml=None, cache=True, lock_joints=None):
+    """지정 관절을 equality 상수잠금한 myoArm MjModel.
 
-    cache=True면 컴파일 1회 캐시 공유(읽기전용). 모델 필드를 수정할 땐
-    cache=False로 fresh 컴파일(캐시 오염 방지).
+    lock_joints=None이면 기본(원위 22: 손목+손가락). 손목해제 모드는
+    손가락 20만 잠그도록 MG.LOCK_JOINTS_WRIST 전달 → 손목은 자유.
+    cache=True면 (xml,lock) 조합당 컴파일 1회 캐시.
     """
     xml = xml or _find_xml()
-    if cache and xml in _MODEL_CACHE:
-        return _MODEL_CACHE[xml]
+    lock_joints = MG.LOCK_JOINTS if lock_joints is None else lock_joints
+    key = (xml, tuple(lock_joints))
+    if cache and key in _MODEL_CACHE:
+        return _MODEL_CACHE[key]
     spec = mujoco.MjSpec.from_file(xml)
-    for jn in MG.LOCK_JOINTS:
+    for jn in lock_joints:
         eq = spec.add_equality()
         eq.type = mujoco.mjtEq.mjEQ_JOINT
         eq.name1 = jn
@@ -68,7 +71,7 @@ def build_locked_model(xml=None, cache=True):
         eq.active = True
     model = spec.compile()
     if cache:
-        _MODEL_CACHE[xml] = model
+        _MODEL_CACHE[key] = model
     return model
 
 
@@ -80,13 +83,19 @@ class ArmPerturbEnv(gym.Env):
                  curriculum_k=(1, 2, 3), curriculum_k_weights=(0.5, 0.3, 0.2),
                  reward_cfg=None, xml=None, act_lowpass=0.0, effort_pow=2,
                  joint_damping_mult=1.0, armature_mult=1.0,
-                 motor_noise=0.0, motor_noise_floor=0.01, ref_gen="warp"):
+                 motor_noise=0.0, motor_noise_floor=0.01, ref_gen="warp", wrist=False):
         super().__init__()
         # 신호의존 운동노이즈(Harris&Wolpert 1998): SD ∝ 명령크기 → 현실적 변동·동시수축
         self.motor_noise = float(motor_noise)
         self.motor_noise_floor = float(motor_noise_floor)
-        # 참조 생성기: 'warp'(평균+4latent) | 'vae'(VAE) | 'fpca'(fPCA/ProMP, 권장)
-        self._refmod = {"vae": vae_ref, "fpca": fpca_ref}.get(ref_gen, warp)
+        # 손목 해제 모드(T1 full-sequence): 손목 잠금해제·손목근 행동추가·full-seq fPCA 참조
+        self.wrist = bool(wrist)
+        if self.wrist:
+            from references import fpca_full_ref
+            ref_gen = "fpca_full"
+            self._refmod = fpca_full_ref
+        else:
+            self._refmod = {"vae": vae_ref, "fpca": fpca_ref}.get(ref_gen, warp)
         self.ref_gen = ref_gen
         self.task_mode = task               # 'T1' | 'T2' | 'mix'
         self.tasks = ["T1", "T2"] if task == "mix" else [task]
@@ -104,8 +113,9 @@ class ArmPerturbEnv(gym.Env):
         self.curriculum_k_weights = list(curriculum_k_weights)
         self._eval = False                  # 평가 모드(RSI off, fixed latent)
 
+        lock = MG.get_cfg(self.wrist)["lock"]    # 손목 모드면 손가락만 잠금(손목 자유)
         mod = (joint_damping_mult != 1.0 or armature_mult != 1.0)
-        self.model = build_locked_model(xml, cache=not mod)
+        self.model = build_locked_model(xml, cache=not mod, lock_joints=lock)
         if mod:   # 어깨·팔꿈치·전완 DoF에만(원위 잠금 관절 제외)
             for n in (MG.TRACK_DOF + MG.FREE_DOF):
                 dof = self.model.jnt_dofadr[mujoco.mj_name2id(
@@ -116,13 +126,17 @@ class ArmPerturbEnv(gym.Env):
         self.dt = self.model.opt.timestep * frame_skip
         self.n_steps = int(round(horizon_s / self.dt))
 
-        ids = MG.resolve(self.model)
+        ids = MG.resolve(self.model, wrist=self.wrist)
         self.action_idx = np.array(ids["action_idx"])
         self.perturb_idx = ids["perturb_idx"]
+        self.track_dof = ids["track_dof"]                 # 모드별 추적 DoF
+        self.track_w = ids["track_w"]; self.track_band = ids["track_band"]
+        self.track_kout = ids["track_kout"]
         self.track_qadr = ids["track_qadr"]
         self.track_dadr = ids["track_dadr"]
         self.rot_qadr = ids["rot_qadr"]; self.rot_dadr = ids["rot_dadr"]
-        self.n_act = len(self.action_idx)   # 26
+        self.n_act = len(self.action_idx)                 # 26 또는 32(손목)
+        self.n_perturb = len(self.perturb_idx)            # 10 또는 12(손목)
 
         # 명목 gainprm/biasprm 백업(섭동 복원용)
         self._gain0 = self.model.actuator_gainprm.copy()
@@ -187,8 +201,8 @@ class ArmPerturbEnv(gym.Env):
         """C 섭동: 표적 채널에 s_F(force)·s_L(length range) 적용. 건강이면 전부 1."""
         self.model.actuator_gainprm[:] = self._gain0
         self.model.actuator_biasprm[:] = self._bias0
-        self.s_F = np.ones(MG.N_PERTURB_CH)
-        self.s_L = np.ones(MG.N_PERTURB_CH)
+        self.s_F = np.ones(self.n_perturb)
+        self.s_L = np.ones(self.n_perturb)
         # 고정 섭동(진단/데이터생성) 우선
         fp = getattr(self, "_fixed_perturb", None)
         if fp is not None:
@@ -199,7 +213,7 @@ class ArmPerturbEnv(gym.Env):
             return
         # 희소-k: 손상 채널 수 k 선택 후 해당 채널만 약화
         k = int(self.rng.choice(self.curriculum_k, p=self._k_weights_norm()))
-        chans = self.rng.choice(MG.N_PERTURB_CH, size=k, replace=False)
+        chans = self.rng.choice(self.n_perturb, size=k, replace=False)
         for ch in chans:
             self.s_F[ch] = float(self.rng.uniform(0.05, 1.0))
             self.s_L[ch] = float(self.rng.uniform(0.70, 1.20))
@@ -207,7 +221,7 @@ class ArmPerturbEnv(gym.Env):
 
     def _write_perturb_to_model(self):
         """self.s_F/s_L(채널별)을 모델 gainprm/biasprm에 적용(명목 기준 절대)."""
-        for ch in range(MG.N_PERTURB_CH):
+        for ch in range(self.n_perturb):
             sF = self.s_F[ch]; sL = self.s_L[ch]
             if sF == 1.0 and sL == 1.0:
                 continue
@@ -251,7 +265,7 @@ class ArmPerturbEnv(gym.Env):
 
     def _set_pose_to_ref(self, idx, noise=False):
         q = self.data.qpos
-        for n in MG.TRACK_DOF:
+        for n in self.track_dof:
             v = self.ref[n][idx]
             if noise:
                 v = v + self.rng.normal(0, np.radians(3.0))
@@ -295,15 +309,15 @@ class ArmPerturbEnv(gym.Env):
     def _obs(self):
         i = min(self.t_idx, self.n_steps - 1)
         ia = min(self.t_idx + self.lookahead, self.n_steps - 1)
-        q = np.array([self.data.qpos[self.track_qadr[n]] for n in MG.TRACK_DOF]
+        q = np.array([self.data.qpos[self.track_qadr[n]] for n in self.track_dof]
                      + [self.data.qpos[self.rot_qadr]])
-        qd = np.array([self.data.qvel[self.track_dadr[n]] for n in MG.TRACK_DOF]
+        qd = np.array([self.data.qvel[self.track_dadr[n]] for n in self.track_dof]
                       + [self.data.qvel[self.rot_dadr]])
         act = self.data.act[self.action_idx]
-        ref_now = np.array([self.ref[n][i] for n in MG.TRACK_DOF])
+        ref_now = np.array([self.ref[n][i] for n in self.track_dof])
         ref_err = np.array([self.ref[n][i] - self.data.qpos[self.track_qadr[n]]
-                            for n in MG.TRACK_DOF])
-        ref_ahead = np.array([self.ref[n][ia] for n in MG.TRACK_DOF])
+                            for n in self.track_dof])
+        ref_ahead = np.array([self.ref[n][ia] for n in self.track_dof])
         phase = i / max(1, self.n_steps - 1)
         in_hold = 1.0 if self.t_idx >= self.rise_steps else 0.0
         L = self.latent
@@ -329,13 +343,13 @@ class ArmPerturbEnv(gym.Env):
         # TASK_track
         task = 0.0
         errs = {}
-        for n in MG.TRACK_DOF:
+        for n in self.track_dof:
             err = self.data.qpos[self.track_qadr[n]] - self.ref[n][i]
             errs[n] = err
-            task += MG.TRACK_W[n] * self._band_gauss(err, MG.TRACK_BAND[n],
-                                                     MG.TRACK_KOUT[n])
+            task += self.track_w[n] * self._band_gauss(err, self.track_band[n],
+                                                       self.track_kout[n])
         # QUALITY: jerk(가속) + dctrl(행동평활) + settle(정지)
-        td = [self.track_dadr[n] for n in MG.TRACK_DOF]
+        td = [self.track_dadr[n] for n in self.track_dof]
         qacc = self.data.qacc[td]
         jerk = float(np.mean(qacc ** 2))
         dctrl = float(np.mean((action - self.prev_action) ** 2))
@@ -346,10 +360,10 @@ class ArmPerturbEnv(gym.Env):
         vel_pen = 0.0
         if self.rc["w_vel"] > 0.0:
             j = max(1, i)
-            for n in MG.TRACK_DOF:
+            for n in self.track_dof:
                 ref_v = (self.ref[n][j] - self.ref[n][j - 1]) / self.dt
                 q_v = self.data.qvel[self.track_dadr[n]]
-                vel_pen += MG.TRACK_W[n] * (q_v - ref_v) ** 2
+                vel_pen += self.track_w[n] * (q_v - ref_v) ** 2
             vel_pen *= self.rc["w_vel"]
         quality = np.exp(-(self.rc["c_jerk"] * jerk + self.rc["c_dctrl"] * dctrl
                            + self.rc["c_settle"] * settle + vel_pen))
@@ -358,7 +372,7 @@ class ArmPerturbEnv(gym.Env):
         effort = -self.rc["w_effort"] * act_mag
         # shoulder_rot 약정칙화
         rot = float(self.data.qpos[self.rot_qadr])
-        rot_pen = -self.rc["w_rot"] * max(0.0, abs(rot) - MG.ROT_FREE_BAND) ** 2
+        rot_pen = -self.rc["w_rot"] * max(0.0, abs(rot) - MG.ROT_FREE_BAND) ** 2  # rot밴드 공용
 
         reward = task * quality + effort + rot_pen
 

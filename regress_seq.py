@@ -118,7 +118,7 @@ def train(data, channels="all", stride=2, epochs=80, bs=256, lr=1e-3,
 
     w = (1.0 + 2.0 * (1.0 - ytr[:, :10]).clamp(0, 1).max(1).values) if reweight else torch.ones(len(ytr))
 
-    model = TCN(Xtr.shape[1], Ctr.shape[1])
+    model = TCN(Xtr.shape[1], Ctr.shape[1], n_out=ytr.shape[1])   # n_out=2×섭동채널(10→20, 손목12→24)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, epochs)
     lossf = nn.SmoothL1Loss(reduction="none")
@@ -148,20 +148,23 @@ def report(model, val):
     with torch.no_grad():
         pv = model(Xv, Mv, Cv).numpy()
     yv = yv.numpy()
+    nch = yv.shape[1] // 2                          # 섭동 채널수(10 또는 손목12)
+    from custom_envs.muscle_groups import PERTURB_CHANNELS, PERTURB_CHANNELS_WRIST
+    names = [c for c, _ in (PERTURB_CHANNELS_WRIST if nch == 12 else PERTURB_CHANNELS)]
     def r2(t, p):
         return 1 - ((t - p) ** 2).sum() / (((t - t.mean()) ** 2).sum() + 1e-9)
     print("\n=== 채널별 식별성 (s_F: Fmax scale) — 시계열 회귀 ===")
     print(f"{'채널':<12}{'MAE':>8}{'R²':>8}  해석")
     r2s = []
-    for i, n in enumerate(CH):
+    for i, n in enumerate(names):
         m = np.abs(yv[:, i] - pv[:, i]).mean(); rr = r2(yv[:, i], pv[:, i]); r2s.append(rr)
         v = "강식별" if rr > 0.6 else ("부분" if rr > 0.3 else "약식별")
         print(f"{n:<12}{m:>8.3f}{rr:>8.2f}  {v}")
     print(f"  s_F 평균 R² {np.mean(r2s):.3f}")
     print("=== s_L (Lopt scale) ===")
-    r2l = [r2(yv[:, 10 + i], pv[:, 10 + i]) for i in range(10)]
-    for i, n in enumerate(CH):
-        print(f"{n:<12}{np.abs(yv[:,10+i]-pv[:,10+i]).mean():>8.3f}{r2l[i]:>8.2f}")
+    r2l = [r2(yv[:, nch + i], pv[:, nch + i]) for i in range(nch)]
+    for i, n in enumerate(names):
+        print(f"{n:<12}{np.abs(yv[:,nch+i]-pv[:,nch+i]).mean():>8.3f}{r2l[i]:>8.2f}")
     print(f"  s_L 평균 R² {np.mean(r2l):.3f}")
     return np.mean(r2s), np.mean(r2l)
 

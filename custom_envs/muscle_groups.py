@@ -70,9 +70,32 @@ FREE_DOF = ["shoulder_rot"]
 ROT_FREE_BAND = _np.radians(50.0)   # 이 안은 자유, 밖은 약벌점
 
 
-def resolve(model):
-    """모델에서 이름→actuator index, 추적/자유 DoF→qpos addr 매핑 반환."""
+# ── 손목 해제 모드(T1 full-sequence) 설정 ──────────────────────────
+WRIST_MUSCLES = ["ECRL", "ECRB", "ECU", "FCR", "FCU", "PL"]   # 손목 굴근·신근
+ACTION_MUSCLES_WRIST = ACTION_MUSCLES + WRIST_MUSCLES          # 32
+LOCK_JOINTS_WRIST = [j for j in LOCK_JOINTS if j not in ("deviation", "flexion")]  # 손가락 20만
+TRACK_DOF_WRIST = TRACK_DOF + ["flexion", "deviation"]        # +손목 굴곡·편위
+TRACK_W_WRIST = dict(TRACK_W, flexion=0.10, deviation=0.10)   # 저가중(스코프밖·noisy)
+TRACK_BAND_WRIST = dict(TRACK_BAND, flexion=_np.radians(15.0), deviation=_np.radians(15.0))
+TRACK_KOUT_WRIST = dict(TRACK_KOUT, flexion=12.0, deviation=12.0)
+PERTURB_CHANNELS_WRIST = PERTURB_CHANNELS + [
+    ("W_ext", ["ECRL", "ECRB", "ECU"]), ("W_flex", ["FCR", "FCU", "PL"])]   # 12채널
+
+
+def get_cfg(wrist=False):
+    """모드별 설정(이름 리스트). wrist=True면 손목 해제(32근·손목추적·12섭동채널)."""
+    if wrist:
+        return dict(action=ACTION_MUSCLES_WRIST, lock=LOCK_JOINTS_WRIST,
+                    track=TRACK_DOF_WRIST, w=TRACK_W_WRIST, band=TRACK_BAND_WRIST,
+                    kout=TRACK_KOUT_WRIST, perturb=PERTURB_CHANNELS_WRIST)
+    return dict(action=ACTION_MUSCLES, lock=LOCK_JOINTS, track=TRACK_DOF,
+                w=TRACK_W, band=TRACK_BAND, kout=TRACK_KOUT, perturb=PERTURB_CHANNELS)
+
+
+def resolve(model, wrist=False):
+    """모델에서 이름→actuator index, 추적/자유 DoF→qpos addr 매핑 반환(모드별)."""
     import mujoco
+    cfg = get_cfg(wrist)
     def aid(name):
         i = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
         if i < 0:
@@ -87,15 +110,15 @@ def resolve(model):
         j = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
         return int(model.jnt_dofadr[j])
 
-    action_idx = [aid(n) for n in ACTION_MUSCLES]
-    perturb_idx = [[aid(n) for n in muses] for _, muses in PERTURB_CHANNELS]
     return {
-        "action_idx": action_idx,                       # 26
-        "action_names": list(ACTION_MUSCLES),
-        "perturb_idx": perturb_idx,                      # 10 채널의 근육 idx 리스트
-        "perturb_names": [c for c, _ in PERTURB_CHANNELS],
-        "track_qadr": {n: qadr(n) for n in TRACK_DOF},
-        "track_dadr": {n: dadr(n) for n in TRACK_DOF},
+        "action_idx": [aid(n) for n in cfg["action"]],
+        "action_names": list(cfg["action"]),
+        "perturb_idx": [[aid(n) for n in muses] for _, muses in cfg["perturb"]],
+        "perturb_names": [c for c, _ in cfg["perturb"]],
+        "track_dof": list(cfg["track"]),
+        "track_w": cfg["w"], "track_band": cfg["band"], "track_kout": cfg["kout"],
+        "track_qadr": {n: qadr(n) for n in cfg["track"]},
+        "track_dadr": {n: dadr(n) for n in cfg["track"]},
         "rot_qadr": qadr("shoulder_rot"),
         "rot_dadr": dadr("shoulder_rot"),
     }
