@@ -54,7 +54,6 @@ def _latent_from(task, z_std, T):
 
 
 def sample_latent(task, rng, jitter=0.0):
-    task = "T1"                                           # 손목 모드는 T1만
     p = _load(task); sstd = p["sstd"]; Ts = p["T"]
     z = sstd[rng.integers(len(sstd))] + rng.normal(0, KDE_H, size=sstd.shape[1])
     T = float(rng.choice(Ts) * (1 + jitter * rng.standard_normal()))
@@ -62,14 +61,14 @@ def sample_latent(task, rng, jitter=0.0):
 
 
 def median_latent(task="T1"):
-    p = _load("T1")
-    return _latent_from("T1", np.zeros(len(p["lam"])), float(np.median(p["T"])))
+    p = _load(task)
+    return _latent_from(task, np.zeros(len(p["lam"])), float(np.median(p["T"])))
 
 
 def make_reference(task, latent, n_steps, dt):
     cur = latent.get("_curve")
     if cur is None:
-        cur = _latent_from("T1", np.zeros(len(_load("T1")["lam"])), 2.0)["_curve"]
+        cur = _latent_from(task, np.zeros(len(_load(task)["lam"])), 2.0)["_curve"]
     ph = np.linspace(0, 1, N)
     ph_t = np.clip(np.arange(n_steps) * dt / max(1e-3, float(latent["T"])), 0, 1)
     at = lambda c: np.interp(ph_t, ph, c)
@@ -86,5 +85,6 @@ def _selftest():
 
 
 if __name__ == "__main__":
-    train_task("T1")
+    for t in ("T1", "T2"):
+        train_task(t)
     _selftest()
