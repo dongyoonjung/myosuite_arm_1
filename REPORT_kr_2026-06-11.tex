@@ -1,0 +1,188 @@
+\documentclass[11pt]{article}
+\usepackage{kotex}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\linespread{1.12}
+\renewcommand{\vec}[1]{\mathbf{#1}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Obs}{\mathcal{O}}\newcommand{\Act}{\mathcal{A}}\newcommand{\St}{\mathcal{S}}
+\newcommand{\Cset}{\mathcal{C}}\newcommand{\Dset}{\mathcal{D}}
+\newcommand{\qref}{q^{\mathrm{ref}}}
+\newcommand{\clip}{\operatorname{clip}}\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\intuition}[1]{\par\smallskip\noindent\textbf{[직관]}\ #1\par\smallskip}
+
+\title{\textbf{운동학만으로 근육 약화를 찾는다:\\ myoArm 식별 연구 --- 한국어 상세 해설}}
+\author{쉽고 자세하게, 수식은 정확하게}
+\date{2026-06-11}
+
+\begin{document}
+\maketitle
+
+\section{무엇을·왜 하는가 (큰 그림)}
+가상의 팔(근육 63개를 가진 MuJoCo 모형 \emph{myoArm})에서 특정 근육의 \textbf{최대 힘}($F_{\max}$)과 \textbf{최적 길이}($L_{opt}$)를 일부러 낮춰 ``약화''를 만든다. 약화 정도를 배율로 적어 $s_F$(힘 배율), $s_L$(길이 배율)라 한다($s_F{=}0.3$이면 힘이 30\%로 줄어든 것). 그런 팔이 표준 거상(팔 들어올리기) 동작을 할 때의 \textbf{관절 움직임(운동학)만} 관측해서, 어느 근육이 얼마나 약한지($s_F,s_L$)를 되맞히는 인공지능(회귀기)을 만든다. EMG(근전도)는 쓰지 않는다 --- 실제 임상에서 모션캡처로 얻는 정보만 쓰는 셈이다.
+
+\intuition{핵심 아이디어는 ``\textbf{느슨하게 따라 하기}''다. 가상 팔(정책)이 사람 동작을 너무 정확히 따라 하게 만들면, 근육이 약해도 다른 근육으로 악착같이 보상해서 움직임에 약화가 안 드러난다. 느슨하게 두면 \emph{경증 약화는 다른 근육으로 보상(움직임은 정상)}, \emph{중증 약화는 목표에 못 미침(움직임 이탈)}으로 자연히 갈라진다. 그 차이를 회귀기가 읽는다.}
+
+\noindent전체 파이프라인: \;(1) 사람 데이터로 \textbf{따라 할 목표 궤적} 생성 → (2) 강화학습으로 \textbf{약화를 알고 목표를 느슨히 추종}하는 정책 학습 → (3) 정책을 약화$\times$동작변형 조합으로 대량 시뮬레이션 → (4) \textbf{운동학 시계열 → 약화} 회귀기 학습. 학습되는 신경망은 (2) 정책과 (4) 회귀기 두 개. 목표 궤적 생성은 통계모형(fPCA) 또는 딥러닝(VAE).
+
+\section{시뮬레이션 환경}
+\textbf{모델}: 관절 38개(독립 27 + 견갑 연동 11, 자동), 근육 63개. 어깨 3축(거상평면 \texttt{elv\_angle}, 거상각 \texttt{shoulder\_elv}, 축회전 \texttt{shoulder\_rot}) + 팔꿈치 \texttt{elbow\_flexion} + 전완 회내외 \texttt{pro\_sup}. 제어 50\,Hz($\Delta t{=}0.02$s, 물리 500\,Hz를 10번 적분).
+
+\textbf{행동 근육 26개}: 어깨 15(삼각근 DELT1/2/3, 극상근, 회전근개 등) + 팔꿈치 9(삼두·이두 등) + 회내근 2(PT,PQ). 손목·손가락 22관절은 equality 제약으로 고정(분석 범위를 어깨·팔꿈치로 한정).
+
+\textbf{약화(섭동) 주입}: 근육 $i$의 MuJoCo gain 파라미터를 직접 수정.
+\begin{equation}
+\text{gain}_{i,2}\leftarrow s_F^{c}\cdot\text{gain}^{0}_{i,2}\quad(\text{gain}_2=F_{\max}),\qquad
+\text{gain}_{i,0:2}\leftarrow \text{gain}^{0}_{i,0:2}/s_L^{c}\quad(\text{작동 길이범위}).
+\end{equation}
+\textbf{섭동 채널 $\Cset$}(10개): 개별 8(DELT1/2/3, SUPSP, PECM1, CORB, BIClong, TRIlong) + 묶음 2(A=\{INFSP,SUBSC,TMIN\} 하부 회전근개, B=\{TMAJ,LAT1-3\}). \textbf{희소-$k$ 커리큘럼}: 매 에피소드 손상 채널 수 $k\!\sim\!\mathrm{Cat}(\{1,2,3\};0.5,0.3,0.2)$만 약화, 그 채널만 $s_F\!\sim\!U[0.05,1]$, $s_L\!\sim\!U[0.7,1.2]$.
+
+\section{강화학습 정책}
+정책 $\pi$는 ``상태(관측)를 보고 26개 근육에 얼마나 힘을 줄지''를 출력한다. 보상을 최대화하도록 PPO로 학습.
+
+\subsection{관측 $\Obs$ --- 정책이 보는 입력 (76차원)}
+\intuition{매 순간 정책에게 ``지금 팔이 어떤 자세·속도인지, 목표는 무엇이고 얼마나 벗어났는지, 이 사람의 동작 특성과 어느 근육이 약한지''를 한 벡터로 준다.}
+관측은 상태 $s_t$의 함수 $\vec o_t=\phi(s_t)\in\R^{76}$. 추적 자유도 $\Dset{=}\{$elv, plane, elbow, prosup$\}$, 자유축 rot.
+\begin{align}
+\vec o_t=\big[\;
+&\tfrac{1}{\pi}\vec q_{\Dset\cup\{\mathrm{rot}\}}\ (5),\ \ \tfrac{1}{5}\dot{\vec q}\ (5),\ \ \vec a^{\mathrm{act}}\ (26),\nonumber\\
+&\tfrac{1}{\pi}\qref_{\Dset}(t)\ (4),\ \ \tfrac{1}{\pi}\underbrace{(\qref_{\Dset}(t){-}\vec q_{\Dset})}_{\text{추적오차}}\ (4),\ \ \tfrac{1}{\pi}\qref_{\Dset}(t{+}5)\ (4),\nonumber\\
+&[\varphi_t,\mathbb 1_{\mathrm{hold}}]\ (2),\ \ \tilde{\boldsymbol\ell}\ (5),\ \ [\vec s_F,\vec s_L]\ (20),\ \ \mathbb 1[\text{task}{=}T_2]\ (1)\;\big]
+\end{align}
+각 블록과 의미:
+\begin{center}\small
+\begin{tabular}{c l c l}
+\hline\hline
+\# & 블록 & 차원 & 의미 \\ \hline
+1,2 & 관절각 $\vec q$, 속도 $\dot{\vec q}$ & 5,5 & 현재 자세·운동상태 (rad, ÷$\pi$ / rad/s, ÷5)\\
+3 & 근육 활성 $\vec a^{\mathrm{act}}$ & 26 & 자기 근육의 현재 활성도 $[0,1]$ (협응·떨림제어)\\
+4,5,6 & 참조·오차·선행 & 4,4,4 & 지금 목표각, 얼마나 벗어났나, 0.1s 뒤 목표 \\
+7 & 위상 $\varphi_t,\mathbb 1_{\mathrm{hold}}$ & 2 & 동작 진행도($t/H$), 정점유지 국면 여부 \\
+8 & latent $\tilde{\boldsymbol\ell}$ & 5 & 이 동작의 변동인자(속도T·정점·모양·평면·팔꿈치) \\
+9 & 섭동 $[\vec s_F,\vec s_L]$ & 20 & \textbf{약화 정보}(채널10×2). 만성환자=적응 가정 \\
+10 & 과제 & 1 & T1(관상) / T2(전방) \\ \hline\hline
+\end{tabular}
+\end{center}
+합 $5{+}5{+}26{+}4{+}4{+}4{+}2{+}5{+}20{+}1=76$. 신경망 입력 전 실행통계로 표준화: $\tilde{\vec o}_t=\clip((\vec o_t-\boldsymbol\mu_o)/\boldsymbol\sigma_o,-10,10)$.
+\intuition{블록 9(약화를 obs에 줌)가 의아할 수 있다. 대상이 \emph{만성 환자}라 신경계가 자기 근육 상태에 이미 적응했으므로, 정책이 약화를 ``알고'' 보상하는 게 현실적이다. 그 보상 흔적이 움직임에 남아 회귀기가 역산한다.}
+
+\subsection{행동 $\Act$ --- 정책의 출력}
+\begin{equation}
+\Act=[-1,1]^{26},\qquad u_j=\tfrac12(a_j+1)\in[0,1]\ (\text{근육 흥분}).
+\end{equation}
+\textbf{운동노이즈}(Harris--Wolpert 1998; 신경명령 노이즈의 크기가 명령에 비례 → 생리적 변동):
+\begin{equation}
+u_j\leftarrow\clip(u_j+\eta_j,0,1),\qquad \eta_j\sim\mathcal N\!\big(0,(\sigma_{\mathrm{sd}}u_j+\sigma_0)^2\big),\quad\sigma_{\mathrm{sd}}{=}0.1,\ \sigma_0{=}0.01.
+\end{equation}
+흥분 $u$ → (활성동역학 $\tau_{act}{=}10$ms) → 활성 $a^{\mathrm{act}}$ → (force--length--velocity) → 힘. MuJoCo가 처리.
+
+\subsection{보상 --- ``잘했다''의 정의 (항별)}
+\begin{equation}
+\boxed{\,r_t=\underbrace{\mathrm{TASK}_t}_{\text{목표추종}}\cdot\underbrace{\mathrm{QUALITY}_t}_{\text{매끄러움}}+w_e\underbrace{\mathrm{EFFORT}_t}_{\text{노력}}+\underbrace{\mathrm{pen}^{\mathrm{rot}}_t}_{\text{회전}}\,}
+\end{equation}
+\textbf{(1) TASK --- 양면 느슨밴드:}
+\begin{equation}
+\mathrm{TASK}_t=\sum_{i\in\Dset}w_i\exp\!\Big(-k_i^{\mathrm{out}}\big[\max(0,\,|q_i-\qref_i|-b_i)\big]^2\Big).
+\end{equation}
+\intuition{목표각에서 밴드 $b_i$(약 10--15°) \emph{이내면 벌점 0}(사람마다 다른 건 허용), 밖이면 급감. 예: $b{=}10°,k^{\mathrm{out}}{=}30,w{=}0.15$일 때 오차 5°→기여 0.15(만점), 오차 20°→$0.15\,e^{-30(0.175)^2}{=}0.06$. \emph{거상 가중을 0.15로 낮게} 둔 이유: 빡빡하면 약화가 안 드러나서. 느슨해야 중증 약화가 이탈로 보인다.}
+계수: $w{=}(0.15,0.15,0.25,0.20)$, $b{=}(10,15,12,20)°$, $k^{\mathrm{out}}{=}(30,18,22,12)$.
+
+\textbf{(2) QUALITY --- 부드러움(0\,$\sim$\,1 곱인자):}
+\begin{equation}
+\mathrm{QUALITY}_t=\exp\!\Big(-\big(c_J\overline{\ddot q^2}+c_D\overline{(\vec a_t-\vec a_{t-1})^2}+c_S\mathbb 1_{\mathrm{hold}}\overline{\dot q^2}\big)\Big),\ \ c_J{=}5\!\times\!10^{-6},c_D{=}0.5,c_S{=}1.
+\end{equation}
+각각 가속(떨림)·행동변화(급변)·정점유지 속도(정지)를 벌해 부드럽게 만든다.
+
+\textbf{(3) EFFORT(힘 아끼기) + 회전 정칙화 + 종료:}
+\begin{equation}
+\mathrm{EFFORT}_t=-\tfrac1{26}\textstyle\sum_j(a^{\mathrm{act}}_j)^2,\quad
+\mathrm{pen}^{\mathrm{rot}}_t=-0.5\,[\max(0,|q_{\mathrm{rot}}|-50°)]^2,\quad w_e{=}0.05.
+\end{equation}
+추적오차가 $50°$(elv)/$60°$(elbow)를 넘거나 속도가 폭주하면 $r_t\!-\!1$ 후 종료. 밴드를 \textbf{넓게(50°)} 둔 이유: 약화로 인한 이탈은 살아남아 신호가 되고, 정상 발산만 차단.
+
+\subsection{정책망·가치망 출력공간과 PPO}
+\intuition{정책은 ``관측 → 행동의 \emph{확률분포}''를 낸다(탐색 위해). 가치망은 ``이 상태가 앞으로 얼마나 좋은지''를 낸다.}
+\begin{equation}
+\pi_\psi:\Obs\to\mathcal P(\Act),\quad \pi_\psi(\cdot|\vec o)=\mathcal N\!\big(\boldsymbol\mu_\psi(\vec o),\diag(e^{2\boldsymbol\sigma_\psi})\big),\qquad V_\psi:\Obs\to\R.
+\end{equation}
+즉 정책 출력공간 $=\R^{26}\times\R_{>0}^{26}$ (평균 $\boldsymbol\mu_\psi(\vec o)$, 상태독립 log-std $\boldsymbol\sigma_\psi$). $\boldsymbol\mu_\psi,V_\psi$는 각각 MLP $[256,256]$+tanh.
+\textbf{PPO 목적}(이득 $\hat A_t$=GAE, 비율 $\rho_t=\pi_\psi/\pi_{\psi_{\mathrm{old}}}$):
+\begin{equation}
+\mathcal L(\psi)=-\mathbb E\big[\min(\rho_t\hat A_t,\ \clip(\rho_t,1{-}\epsilon,1{+}\epsilon)\hat A_t)\big]+c_v\mathbb E[(V_\psi-\hat R_t)^2]-c_e\mathbb E[\mathcal H(\pi_\psi)].
+\end{equation}
+$\epsilon{=}0.2$, lr $3{\times}10^{-4}$, rollout $512{\times}20$, minibatch 4096, 10 epoch/update, $\gamma{=}0.99$, $\lambda{=}0.95$, $c_v{=}0.5$, $c_e{=}0$. \textbf{커리큘럼·warm-start}: M1 건강·고정(T1) → M2 분포+T2 → M3 섭동 $k{=}1\!\to\!k{\le}3$, 단계마다 가중치 이어받음(관측 76 고정).
+
+\section{참조(따라 할 목표) 생성}\label{sec:ref}
+\intuition{한 동작만 쓰면 단조롭다. 실제 사람 데이터(KIMHu 20명)의 거상 궤적을 \emph{다양하고 현실적으로} 변형해 목표를 만든다. 방법을 발전: warp(평균+1모드) → VAE → \textbf{fPCA(채택)}.}
+\textbf{데이터셋}: 반복별 다채널 궤적을 위상 $N$점 리샘플. $\mathcal X=\{\vec X^{(m)}\in\R^{N\times d}\}_{m=1}^{M}$, $(N,d){=}(50,4)$(거상만) 또는 $(80,6)$(전체+손목), $M{\approx}200$. 채널: 거상·팔꿈치·평면·회내($+$손목 굴곡·편위). 채널별 표준화 후 평탄화 $\vec x^{(m)}\in\R^{Nd}$.
+
+\subsection{fPCA / ProMP (채택) --- 단계별}
+\textbf{입력} $\R^{Nd}$, \textbf{출력} 새 궤적 $\R^{N\times d}$(→시간워핑 $\R^{H\times|\Dset|}$).
+\begin{enumerate}
+\item 평균 $\bar{\vec x}$, 중심화 후 SVD $\mathbf X_c=\mathbf U\mathbf S\mathbf V^\top$, 고윳값 $\lambda_k=S_{kk}^2/(M{-}1)$, 주성분 $\boldsymbol\phi_k=\mathbf V_{:,k}$.
+\item 95\% 분산 모드 수 $K=\min\{K:\sum_{k\le K}\lambda_k/\sum_k\lambda_k\ge0.95\}$ (실측 $K{=}13\!\sim\!24$).
+\item 점수 $w_k^{(m)}=\langle\vec x_c^{(m)},\boldsymbol\phi_k\rangle$, 표준화 $\hat w_k=w_k/\sqrt{\lambda_k}$.
+\item \textbf{생성(점수공간 KDE)}: 실제 점수 하나 뽑아 작은 jitter,
+\begin{equation}
+\hat{\vec z}=\hat{\vec w}^{(j)}+\boldsymbol\varepsilon,\ \boldsymbol\varepsilon\sim\mathcal N(0,h^2I),\ h{=}0.35;\qquad
+\hat{\vec x}=\bar{\vec x}+\sum_{k=1}^{K}\hat z_k\sqrt{\lambda_k}\,\boldsymbol\phi_k.
+\end{equation}
+\item 시간워핑: 이동시간 $T$를 경험분포에서 샘플, $\varphi(t)=\min(t/T,1)$로 보간 → $\qref$.
+\end{enumerate}
+\intuition{왜 fPCA가 좋은가: $\hat{\vec z}\sim\mathcal N(0,I)$면 생성 공분산$=\sum_k\lambda_k\boldsymbol\phi_k\boldsymbol\phi_k^\top$=\emph{실제 데이터의 공분산}이라, 생성 분포의 ``폭''이 실제와 같다. 실측 정점 실제 $94{\pm}9°$ vs fPCA $95{\pm}9°$(폭 일치), 분포거리(KS) 0.07--0.14, 베끼지 않음.}
+
+\subsection{VAE (비교군) --- 식과 한계}
+\textbf{인코더} $q_\vartheta:\R^{200}\!\to\!\mathcal P(\R^6)$, \textbf{디코더} $p_\vartheta:\R^6\!\to\!\R^{200}$ (잠재 $\R^6$):
+\begin{equation}
+\boldsymbol\mu_z,\log\boldsymbol\sigma_z^2=\mathrm{MLP}_{200\to128\to128\to(6,6)}(\vec x),\quad
+\hat{\vec x}=\mathrm{MLP}_{6\to128\to128\to200}(\vec z),\quad \vec z=\boldsymbol\mu_z+\boldsymbol\sigma_z\odot\boldsymbol\varepsilon.
+\end{equation}
+\textbf{손실}($\beta$-ELBO, $\beta{=}0.5$):
+\begin{equation}
+\mathcal L_{\mathrm{VAE}}=\|\vec x-\hat{\vec x}\|_2^2+\beta\cdot\tfrac12\textstyle\sum_k(\sigma_{z,k}^2+\mu_{z,k}^2-1-\log\sigma_{z,k}^2).
+\end{equation}
+\intuition{VAE는 KL 정칙화 + 소량 데이터(200개)로 ``평균화''되어 생성 분포 폭이 실제보다 좁다(정점 sd $9°\!\to\!4°$), 잠재 6개 중 3개만 쓰임(붕괴). 그래서 공분산을 구조적으로 보존하는 fPCA를 채택.}
+
+\section{식별 회귀기 (시계열 TCN)}
+\textbf{입출력공간}: 정책을 1.6$\sim$2만 에피소드 롤아웃해 \textbf{운동학 시계열}과 \textbf{약화 라벨}을 모은다.
+\begin{equation}
+g:\ \underbrace{\R^{T\times C}}_{\text{운동학}\,\vec Z}\times\underbrace{\R^{6}}_{\text{known 공변량}\,\boldsymbol\ell}\ \longrightarrow\ \underbrace{\R^{2|\Cset|}}_{\widehat{\boldsymbol\theta}=[\hat{\vec s}_F;\hat{\vec s}_L]}.
+\end{equation}
+$C=2(|\Dset|{+}1)+|\Dset|$ = 추적DoF+회전의 각도·속도 + 추적오차 = \textbf{14}(기본) 또는 20(손목). \emph{근육 활성/EMG는 입력 안 함.} 가변길이는 $T_{\max}$ 제로패딩+마스크 $\vec m$.
+\textbf{구조}(dilated 1D-TCN + 마스크 풀링; 시간 동역학=상승기울기·이탈시점 포착):
+\begin{align}
+\vec H^{(0)}&=\mathrm{ReLU}\,\mathrm{GN}\,\mathrm{Conv1d}_{k7,s2}(\vec Z^\top),\quad
+\vec H^{(l)}=\mathrm{ReLU}\,\mathrm{GN}\,\mathrm{Conv1d}_{k5,\mathrm{dil}=2^l}(\vec H^{(l-1)}),\ l{=}1,2,3,\\
+\widehat{\boldsymbol\theta}&=\mathrm{MLP}\Big(\big[\,\underbrace{\tfrac{\sum_t m_t\vec H_t}{\sum_t m_t}}_{\text{마스크 평균}};\ \underbrace{\max_{t:m_t=1}\vec H_t}_{\text{마스크 최대}};\ \boldsymbol\ell\,\big]\Big),\quad \text{폭 }64{\to}128.
+\end{align}
+\textbf{손실}(중증 약화 재가중 $w_n{=}1{+}2\max_c(1{-}s_F^{c,n})$, 이상치 강건 Huber):
+\begin{equation}
+\mathcal L=\frac1{|\mathcal B|}\sum_{n}w_n\cdot\frac1{2|\Cset|}\sum_o\mathrm{Huber}(\hat\theta^{(n)}_o-\theta^{(n)}_o).
+\end{equation}
+Adam($10^{-3}$,wd$10^{-5}$)+cosine, batch 256, 100--120 epoch, 85/15 홀드아웃. 평가=채널별 $R^2$,MAE.
+\intuition{왜 시계열인가: 같은 운동학을 \emph{요약통계}(평균·최댓값)로 회귀하면 $R^2{\approx}0.36$에 그쳤지만, \emph{시계열}로 동역학(언제·어떻게 이탈하는지)을 살리면 $0.81$로 급등. 약화 정보는 동작의 \emph{시간 구조}에 있다.}
+
+\section{결과와 해석}
+운동학만(EMG 없음), fPCA 참조, 운동노이즈 하에서 $s_F$(힘 배율) 복원:
+\begin{center}\small
+\begin{tabular}{l c c c}
+\hline\hline
+설정 & 입력채널 $C$ & 어깨/팔꿈치 $R^2$ & 손목근 $R^2$ \\ \hline
+거상(rise), T1+T2, 손목 잠금 & 14 & \textbf{0.81} & --- \\
+전체동작, 손목 해제, T1 & 20 & 0.60 & 0.81 \\
+전체동작, 손목 해제, T1+T2 & 20 & 0.55 & 0.74 \\ \hline\hline
+\end{tabular}
+\end{center}
+채널별(거상·최고설정): 하부회전근개 .94, 광배/대원근 .88, 극상근/이두/삼두장두 .86--.87, 삼각근전 .84, 삼각근중 .79, 삼각근후 .75, 오훼완근/대흉근 .62--.65. 길이배율 $s_L$은 운동학만으론 더 어려움($R^2{\approx}0.56$).
+\begin{itemize}
+\item[(1)] \textbf{EMG 없이 움직임만으로 어깨/팔꿈치 근육 힘 약화를 강식별}($R^2{=}0.81$).
+\item[(2)] \textbf{시계열이 핵심}(요약통계 0.36 → 시계열 0.81). 약화는 동작의 시간 구조에 부호화됨.
+\item[(3)] 참조 생성은 \textbf{fPCA}가 최적(실제 분포 충실, VAE의 분포 과소 회피).
+\item[(4)] \textbf{보상의 느슨밴드}가 약화를 신호로 바꾸는 장치(경증=보상, 중증=이탈).
+\item[(5)] \textbf{트레이드오프}: 손목 해제+전체동작은 손목근 식별($\sim$0.8)을 더하나, 정보가 적은 복귀·조작 구간이 거상-rise(어깨근 최정보 구간)를 희석해 어깨/팔꿈치 식별이 떨어진다. 한 동작으로 둘 다 최대화 불가.
+\end{itemize}
+
+\end{document}
