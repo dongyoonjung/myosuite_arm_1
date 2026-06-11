@@ -1,0 +1,6 @@
+/tmp/kinvae_G.log:  s_F 평균 R² 0.807
+/tmp/kinvae_G.log:  s_L 평균 R² 0.559
+/tmp/M3v.log:  [gate @ 1000000] peakErr=3.5° rms=4.7° tremor=0.10 rev=0 speed=1.63s PASS=True
+/tmp/M3v.log:  [gate @ 2000000] peakErr=4.2° rms=6.1° tremor=0.09 rev=0 speed=1.63s PASS=True
+/tmp/M3v.log:  [gate @ 3000000] peakErr=6.3° rms=5.9° tremor=0.12 rev=0 speed=1.76s PASS=True
+/tmp/M3v.log:  [gate @ 4000000] peakErr=3.6° rms=7.8° tremor=0.06 rev=0 speed=1.58s PASS=True

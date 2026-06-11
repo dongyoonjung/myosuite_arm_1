@@ -271,3 +271,33 @@ $$
 - **2채널 EMG 제약판**: 현실 앵커(중삼각근·이두)만으로의 식별성(privileged 전체 대비 천장 비교).
 - **회전근개 개별 분해 시도**: 묶음 대신 개별 s_F — degeneracy 한계 정량(예상: 낮은 R²).
 - 더 큰 데이터/스윕, s_L 식별성 개선, T·plane 등 latent별 식별성 층화 분석.
+
+---
+
+## 9. 방법론 개정 (★현재 유효 — 2026-06-11 후반)
+
+초기 파이프라인(요약통계·privileged ACT·warp 참조) 이후, 임상 현실성을 높이는 방향으로 **세 가지 개정**을 적용했다.
+
+### 9.1 참조(tracking 대상) 생성: warp → **KIMHu 궤적 VAE 생성모델**
+- 기존 `warp`는 평균 템플릿 + 1 주성분(skew) + 4-latent(T·peak·plane·elbow) 워핑으로, 변동이 저차원이고 형태 모드가 단일했다.
+- 개정: KIMHu 원시 스켈레톤(40 trial 직접 다운로드)에서 **반복별 다채널 상승궤적**(elev·elbow·plane·prosup, 위상 50점)을 추출(T1 203·T2 192 reps)하고, 이를 **변분자동부호기(VAE, variational autoencoder)**로 학습. z~N(0,I)에서 다양하고 현실적인 전체 궤적을 샘플. (`references/extract_traj.py`, `references/vae_ref.py`, env `ref_gen='vae'`.)
+- **생성 품질 평가**(`tools/eval_vae.py`, 그림 `eval_vae_curves/dist.png`): 거상·평면 재구성 RMSE 4–7°, 정점분포 일치(REAL 94±9°→VAE 95±4°), 1-NN 거리상 **현실적·비복사**(복사 0%), 단조·매끄러움 만족. 한계: VAE 평균화로 **분포 폭이 실제보다 좁음**(under-dispersion), 변동 극심한 prosup은 빈약(저가중이라 영향 작음). warp(1 PC)보다 형태 다양성 분명히 풍부.
+
+### 9.2 식별 입력: ACT+KIN → **운동학(KIN)만** (EMG 불요)
+- 임상 시나리오(모션캡처로 *움직임*만 관측, 심부근 활성 측정 불가)에 맞춰 근육 활성(ACT/EMG)을 입력에서 제외하고 **관절 운동학만**으로 추정. 입력 = 매 스텝 14채널(관절각5·속도5·추종오차4), 시계열 TCN.
+
+### 9.3 운동노이즈 (Harris & Wolpert 1998)
+- 신호의존 운동노이즈 $u\leftarrow\mathrm{clip}(u+\mathcal N(0,(0.1u+0.01)^2))$ 하에 정책 재학습(M3v, M3b warm-start). 운동학 센서노이즈도 가법. (만성환자=CNS 적응이므로 privileged 조건정책은 유지 — 진단1 비적용.)
+
+### 9.4 결과 — ★운동학만으로의 식별성
+M3v(VAE 참조·운동노이즈·섭동 재학습, healthy 게이트 통과 peakErr 3.6°)로 20,000 롤아웃 → **14채널 운동학 시계열만** 입력한 TCN 회귀:
+
+| 파라미터 | 평균 R² | 채널별 (s_F) |
+|---|---|---|
+| **s_F (Fmax scale)** | **0.81** | A_lowcuff .94 · B_latadd .88 · SUPSP/BIClong .87 · TRIlong .86 · DELT1 .84 · DELT2 .79 · DELT3 .75 · CORB .65 · PECM1 .62 (전 채널 강식별) |
+| s_L (Lopt scale) | 0.56 | 운동학만으론 길이파라미터가 더 어려움(정직한 천장) |
+
+그림 `fig8_kinonly_vae.png`. 비교: KIN-only가 요약통계(스냅샷)에선 R²0.36였으나 **시계열에선 0.81** — 동작의 시간적 전개(상승 동역학·이탈 시점)가 약화를 부호화함을 재확인. 즉 **EMG 없이 움직임만으로도** 근육 최대힘 약화를 강하게 식별 가능(길이 파라미터는 중간).
+
+- 산출: `models/ppo_arm_M3v.zip`(VAE참조·노이즈 정책), `models/regressor_kinvae.pt`(KIN-only 회귀), 결과 `results/report/kinonly_vae_identifiability.txt`.
+- 개선 여지: VAE β 낮춤으로 참조 다양성 확대, s_L 식별 개선, 더 큰 데이터.
