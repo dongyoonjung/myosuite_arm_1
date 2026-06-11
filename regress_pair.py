@@ -22,9 +22,11 @@ def load(path, stride=2):
     s1, s2 = prep(d["seq1"]), prep(d["seq2"])
     l1 = np.ceil(d["len1"] / stride).astype(np.int32)
     l2 = np.ceil(d["len2"] / stride).astype(np.int32)
-    c1, c2 = d["cov1"].astype(np.float32), d["cov2"].astype(np.float32)
+    # ★공변량: 참조 latent(T·peak·skew·plane·elbow_peak, idx 0:5)는 의도궤적 누수라 제외.
+    #   task_flag(idx 5, 어느 과제를 시켰나=기지)만 유지.
+    c1 = d["cov1"][:, 5:6].astype(np.float32); c2 = d["cov2"][:, 5:6].astype(np.float32)
     y = np.concatenate([d["y_sF"], d["y_sL"]], 1).astype(np.float32)
-    print(f"  KIN {s1.shape[2]}채널(err 제외): {[names[i] for i in keep]}")
+    print(f"  KIN {s1.shape[2]}채널(err 제외): {[names[i] for i in keep]}; 공변량=task_flag만(참조 latent 제외)")
     return s1, s2, l1, l2, c1, c2, y
 
 

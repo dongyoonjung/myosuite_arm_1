@@ -14,18 +14,20 @@
 1. **참조 생성 = fPCA/ProMP** (`references/fpca_ref.py`, full-seq `fpca_full_ref.py`). warp(평균+1PC)→VAE→**fPCA**. fPCA가 평균·공분산 구조 보존 → 실제 분포 충실(VAE는 under-dispersion으로 기각).
 2. **식별 입력 = 운동학(KIN)만** (`gen_seq_data.py --kin-only`). EMG/ACT 드롭 — 실환자 모션캡처로 *관측 가능한 것만*. 시계열 TCN(`regress_seq.py`)이 스냅샷 요약통계보다 압도적(0.36→).
 3. **★추적오차(err) 제외** (`regress_seq.py --no-err`, 페어는 기본 제외). `err=q_ref−q`는 *의도 궤적*을 알아야 계산 → 실환자 미지 → 참조 누수. 제거가 정당. (err 포함 0.81은 누수로 부풀려진 값, 제외 시 단일과제 0.63.)
-4. **★같은 피험자 = 고정 θ로 T1·T2 둘 다 수행 → 공유 θ 추정** (`gen_pair.py`·`regress_pair.py`). 한 궤적이 아니라 **두 시행(T1+T2)을 함께 입력**. 공유 TCN 인코더(가중치 공유)로 시행별 임베딩 + 시행별 공변량(latent) → **어텐션 풀링(순열불변)** → head → θ. θ만 피험자 고정, 참조 style은 시행별 독립 fPCA 샘플.
+4. **★같은 피험자 = 고정 θ로 T1·T2 둘 다 수행 → 공유 θ 추정** (`gen_pair.py`·`regress_pair.py`). 한 궤적이 아니라 **두 시행(T1+T2)을 함께 입력**. 공유 TCN 인코더(가중치 공유)로 시행별 임베딩 + **task_flag만**(어느 과제=기지) → **어텐션 풀링(순열불변)** → head → θ. θ만 피험자 고정, 참조 style은 시행별 독립 fPCA 샘플.
+5. **★공변량에서 참조 latent 제외**. T·peak·skew·plane은 *참조(의도) 궤적*을 파라미터화 → err와 같은 누수. 제거. (검증: 제거해도 0.708→0.715 불변 = 모델이 latent 누수에 의존 안 함, 운동학 자체로 식별 = robust.) task_flag(과제 지시=기지)만 유지.
 - 운동노이즈(Harris–Wolpert, env `motor_noise=0.1`) 적용. 진단1(privileged 제거) 미적용(만성환자=CNS 적응). 손목 해제(env `wrist`)는 트레이드오프라 기본 잠금.
 
-### 핵심 결과 (KIN-only, fPCA 참조, 운동노이즈, M3v 정책)
+### 핵심 결과 (KIN-only, fPCA 참조, 운동노이즈, M3v 정책) — 입력은 **관측가능 운동학만**(err·참조latent 제외)
 | 설정 | s_F 평균 R² | 비고 |
 |---|---|---|
 | 단일과제, err 포함(14ch) | 0.81 | ⚠️ err 누수로 과대 — 폐기 |
-| 단일과제, **err 제외**(10ch) | 0.63 | 관측가능 운동학만(정당) |
-| **T1+T2 페어, err 제외**(공유 θ) | **0.71** | ★현재 최선 — 약식별 채널 개선 |
+| 단일과제, err 제외(10ch) | 0.63 | 관측가능만(정당) |
+| **T1+T2 페어, err·latent 제외**(공유 θ) | **0.715** | ★현재 최선·정본 |
 
-페어 채널별 s_F R²: A_lowcuff .94, SUPSP .83, B_latadd .81, DELT2/BIClong/TRIlong .78–.79, DELT1 .73, DELT3 .60, PECM1 .46, CORB .35. (단일과제 대비 DELT3 .44→.60, DELT2 .65→.79, CORB .22→.35 등 향상 — T1·T2 상보부하 효과 실증.) s_L 평균 0.35(관측 운동학만으론 길이 약식별).
-- **결론**: EMG 없이 *관측 가능 운동학만*으로, *같은 피험자의 T1+T2를 결합*해 어깨/팔꿈치 Fmax 약화를 R²≈0.71로 식별. 손목 해제+full-seq는 손목근 식별(~0.8) 추가하나 어깨/팔꿈치 희석(거상-rise가 최정보 구간) → 기본은 손목 잠금.
+페어 채널별 s_F R²: A_lowcuff .94, SUPSP .83, B_latadd/TRIlong .81, BIClong .80, DELT2 .77, DELT1 .73, DELT3 .61, PECM1 .47, CORB .38. (단일 대비 DELT3 .44→.61, DELT2 .65→.77, CORB .22→.38 향상 — T1·T2 상보부하 실증.) s_L 평균 0.35(관측 운동학만으론 길이 약식별).
+- **결론**: EMG·참조정보 없이 *관측 가능 운동학만*으로, *같은 피험자의 T1+T2를 결합*해 어깨/팔꿈치 Fmax 약화를 R²≈0.715로 식별. 손목 해제+full-seq는 손목근 식별(~0.8) 추가하나 어깨/팔꿈치 희석 → 기본은 손목 잠금.
+- **★데이터 보존**: `data/pair/train.npz`(141MB, 8000 피험자 페어) — **삭제 금지**. 재생성은 `bash tools/run_pair.sh`(M3v+gen_pair). (디스크 확보 위해 texlive 제거함.)
 - **모델**: `ppo_arm_{T1,M2a,M2b,M3a,M3b}`(구·ACT시대), `ppo_arm_M3v`(현 기준: rise·섭동·노이즈), `ppo_arm_wrist`/`wrist_mix`(손목해제 탐색). 회귀: **`regressor_pair.pt`(현 최선)**, `regressor_kin_noerr.pt`(단일·err제외), 구 `regressor_{G,seqG,kinvae,wrist,wrist_mix}.pt`. 생성기 `out/{fpca,fpcafull,vae}_*`.
 - 데이터 파이프라인: `gen_pair.py`(페어)·`gen_seq_data.py`(단일) → `tools/concat_{pair,seq}.py` → `regress_pair.py`/`regress_seq.py`. 학습 이 머신(32코어) 직접. KIMHu 원시는 추출 후 삭제(재다운 `tools/download_kimhu.py`).
 - 비디오 `results/report/M1_T1.mp4`(gitignore). 분석 그림 스크립트 `tools/fig_*.py`.
