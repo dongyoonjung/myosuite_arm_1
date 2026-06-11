@@ -28,7 +28,7 @@
 페어 채널별 s_F R²: A_lowcuff .94, SUPSP .83, B_latadd/TRIlong .81, BIClong .80, DELT2 .77, DELT1 .73, DELT3 .61, PECM1 .47, CORB .38. (단일 대비 DELT3 .44→.61, DELT2 .65→.77, CORB .22→.38 향상 — T1·T2 상보부하 실증.) s_L 평균 0.35(관측 운동학만으론 길이 약식별).
 - **결론**: EMG·참조정보 없이 *관측 가능 운동학만*으로, *같은 피험자의 T1+T2를 결합*해 어깨/팔꿈치 Fmax 약화를 R²≈0.715로 식별. 손목 해제+full-seq는 손목근 식별(~0.8) 추가하나 어깨/팔꿈치 희석 → 기본은 손목 잠금.
 - **★데이터 보존**: `data/pair/train.npz`(141MB, 8000 피험자 페어) — **삭제 금지**. 재생성은 `bash tools/run_pair.sh`(M3v+gen_pair). (디스크 확보 위해 texlive 제거함.)
-- **모델**: `ppo_arm_{T1,M2a,M2b,M3a,M3b}`(구·ACT시대), `ppo_arm_M3v`(현 기준: rise·섭동·노이즈), `ppo_arm_wrist`/`wrist_mix`(손목해제 탐색). 회귀: **`regressor_pair.pt`(현 최선)**, `regressor_kin_noerr.pt`(단일·err제외), 구 `regressor_{G,seqG,kinvae,wrist,wrist_mix}.pt`. 생성기 `out/{fpca,fpcafull,vae}_*`.
+- **모델**(구 crawl-walk T1/M2a/M2b/M3a/M3b는 정리·삭제): `ppo_arm_M3v`(현 기준: rise·섭동·노이즈, 페어 데이터 생성에 사용), `ppo_arm_wrist`/`wrist_mix`(손목해제 탐색·유지). 회귀: **`regressor_pair.pt`(현 최선)**, `regressor_kin_noerr.pt`(단일·err제외), 구 `regressor_{G,seqG,kinvae,wrist,wrist_mix}.pt`. 생성기 `out/{fpca,fpcafull,vae}_*`.
 - 데이터 파이프라인: `gen_pair.py`(페어)·`gen_seq_data.py`(단일) → `tools/concat_{pair,seq}.py` → `regress_pair.py`/`regress_seq.py`. 학습 이 머신(32코어) 직접. KIMHu 원시는 추출 후 삭제(재다운 `tools/download_kimhu.py`).
 - 비디오 `results/report/M1_T1.mp4`(gitignore). 분석 그림 스크립트 `tools/fig_*.py`.
 
