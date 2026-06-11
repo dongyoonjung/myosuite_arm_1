@@ -24,6 +24,7 @@ from gymnasium import spaces
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from references import warp
+from references import vae_ref
 from custom_envs import muscle_groups as MG
 
 XML_DEFAULT = os.path.join(
@@ -78,11 +79,14 @@ class ArmPerturbEnv(gym.Env):
                  curriculum_k=(1, 2, 3), curriculum_k_weights=(0.5, 0.3, 0.2),
                  reward_cfg=None, xml=None, act_lowpass=0.0, effort_pow=2,
                  joint_damping_mult=1.0, armature_mult=1.0,
-                 motor_noise=0.0, motor_noise_floor=0.01):
+                 motor_noise=0.0, motor_noise_floor=0.01, ref_gen="warp"):
         super().__init__()
         # 신호의존 운동노이즈(Harris&Wolpert 1998): SD ∝ 명령크기 → 현실적 변동·동시수축
         self.motor_noise = float(motor_noise)
         self.motor_noise_floor = float(motor_noise_floor)
+        # 참조 생성기: 'warp'(평균+4latent) | 'vae'(KIMHu 궤적 VAE 생성모델)
+        self._refmod = vae_ref if ref_gen == "vae" else warp
+        self.ref_gen = ref_gen
         self.task_mode = task               # 'T1' | 'T2' | 'mix'
         self.tasks = ["T1", "T2"] if task == "mix" else [task]
         self.task = self.tasks[0]           # 현재 에피소드 task(reset서 갱신)
@@ -144,6 +148,8 @@ class ArmPerturbEnv(gym.Env):
 
     # ---- 라텐트/참조 ----
     def _median_latent(self, task):
+        if self.ref_gen == "vae":
+            return vae_ref.median_latent(task)
         import json
         with open(os.path.join(os.path.dirname(warp.__file__), "out",
                                f"latent_{task}.json")) as fh:
@@ -159,11 +165,11 @@ class ArmPerturbEnv(gym.Env):
     def _sample_latent(self):
         if self._eval:
             if getattr(self, "_eval_sample_latent", False):
-                return warp.sample_latent(self.task, self.rng)
+                return self._refmod.sample_latent(self.task, self.rng)
             return dict(self._fixed_latents[self.task])
         if self.latent_mode == "fixed":
             return dict(self._fixed_latents[self.task])
-        return warp.sample_latent(self.task, self.rng)
+        return self._refmod.sample_latent(self.task, self.rng)
 
     def set_perturbation(self, s_F=None, s_L=None):
         """제어된 고정 섭동 설정(진단·M4 데이터생성용). None이면 해제(랜덤복귀).
@@ -226,7 +232,7 @@ class ArmPerturbEnv(gym.Env):
         mujoco.mj_resetData(self.model, self.data)
         self.latent = self._sample_latent()
         self._apply_perturbation()
-        ref = warp.make_reference(self.task, self.latent, self.n_steps, self.dt)
+        ref = self._refmod.make_reference(self.task, self.latent, self.n_steps, self.dt)
         self.ref = {k: np.radians(v).astype(np.float64) for k, v in ref.items()}
         # pro_sup 참조는 시작=0 상대 → 중립(0)에서 시작하는 상대각
         self.rise_steps = int(np.clip(self.latent["T"] / self.dt, 1, self.n_steps))

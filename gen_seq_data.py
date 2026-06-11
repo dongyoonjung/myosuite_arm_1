@@ -40,18 +40,20 @@ def _step_feat(raw):
 
 def generate(model_path, vec_path, task="mix", n=1000, seed=0,
              curriculum_k=(0, 1, 2, 3), curriculum_w=(0.15, 0.45, 0.25, 0.15),
-             motor_noise=0.0, emg_noise=0.0, kin_noise=0.0):
+             motor_noise=0.0, emg_noise=0.0, kin_noise=0.0, ref_gen="warp", kin_only=True):
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
     ks = [k for k in curriculum_k if k >= 1] or [1]
     kw = [w for k, w in zip(curriculum_k, curriculum_w) if k >= 1]
     p_healthy = sum(w for k, w in zip(curriculum_k, curriculum_w) if k == 0)
+    keep = slice(C_ACT, C) if kin_only else slice(0, C)   # KIN-only=ACT 드롭(목표: 운동학만)
+    nch = (C - C_ACT) if kin_only else C
 
     def mk():
         return ArmPerturbEnv(task=task, latent_mode="sample", perturb=True, rsi=False,
                              seed=seed, curriculum_k=tuple(ks), curriculum_k_weights=tuple(kw),
-                             motor_noise=motor_noise)
+                             motor_noise=motor_noise, ref_gen=ref_gen)
     venv = DummyVecEnv([mk])
     venv = VecNormalize.load(vec_path, venv); venv.training = False; venv.norm_reward = False
     raw = venv.venv.envs[0]
@@ -76,12 +78,13 @@ def generate(model_path, vec_path, task="mix", n=1000, seed=0,
             a, _ = model.predict(obs, deterministic=True)
             obs, _, d, _ = venv.step(a); done = d[0]
         arr = np.array(steps, np.float32)            # (L, 77)
-        if emg_noise > 0:                            # EMG 측정노이즈(가법)
+        if emg_noise > 0 and not kin_only:           # EMG 측정노이즈(가법, ACT 유지 시만)
             arr[:, :C_ACT] += rng.normal(0, emg_noise, arr[:, :C_ACT].shape)
         if kin_noise > 0:                            # 운동학 센서노이즈(rad)
             arr[:, C_ACT:] += rng.normal(0, kin_noise, arr[:, C_ACT:].shape)
+        arr = arr[:, keep]                           # KIN-only 시 ACT 드롭
         L = len(arr)
-        pad = np.zeros((Tmax, C), np.float32)
+        pad = np.zeros((Tmax, nch), np.float32)
         pad[:L] = arr[:Tmax]
         seqs.append(pad); lens.append(min(L, Tmax))
         covs.append(cov); ysF.append(sF); ysL.append(sL)
@@ -100,19 +103,21 @@ def main():
     ap.add_argument("--motor-noise", type=float, default=0.0)   # 운동노이즈 σ_sd
     ap.add_argument("--emg-noise", type=float, default=0.0)     # EMG 측정노이즈
     ap.add_argument("--kin-noise", type=float, default=0.0)     # 운동학 센서노이즈(rad)
+    ap.add_argument("--ref-gen", default="warp")                # warp | vae
+    ap.add_argument("--kin-only", type=int, default=1)          # 1=KIN만 저장(ACT 드롭)
     ap.add_argument("--out", default="data/seq/shard.npz")
     a = ap.parse_args()
-    os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     seq, ln, cov, ysF, ysL = generate(a.model, a.vecnorm, task=a.task, n=a.n, seed=a.seed,
                                       motor_noise=a.motor_noise, emg_noise=a.emg_noise,
-                                      kin_noise=a.kin_noise)
+                                      kin_noise=a.kin_noise, ref_gen=a.ref_gen,
+                                      kin_only=bool(a.kin_only))
+    kin_names = ([f"pos_{n}" for n in POS_DOF] + [f"vel_{n}" for n in POS_DOF]
+                 + [f"err_{n}" for n in TRACK])
+    names = kin_names if a.kin_only else ([f"act_{i}" for i in range(63)] + kin_names)
+    blocks = [C_POS, C_VEL, C_ERR] if a.kin_only else [C_ACT, C_POS, C_VEL, C_ERR]
     np.savez_compressed(a.out, seq=seq, length=ln, cov=cov, y_sF=ysF, y_sL=ysL,
-                        channel_names=np.array(
-                            [f"act_{i}" for i in range(63)]
-                            + [f"pos_{n}" for n in POS_DOF]
-                            + [f"vel_{n}" for n in POS_DOF]
-                            + [f"err_{n}" for n in TRACK]),
-                        chan_blocks=np.array([C_ACT, C_POS, C_VEL, C_ERR]))
+                        channel_names=np.array(names), chan_blocks=np.array(blocks))
     print(f"saved {a.out}: seq{seq.shape} len[{ln.min()},{ln.max()}] "
           f"약화비율 {(ysF.min(1) < 0.999).mean():.2f}")
 
