@@ -7,8 +7,11 @@
 ---
 
 ## 0. 한 눈에 — 현재 상태 (2026-06-11)
-- **단계: M0(참조 파이프라인) 구현 + 검증 시각화·시퀀스 유사도까지 완료.** 다음 = **M1**(myoArm 환경 + 건강 베이스라인 검증 게이트).
-- **학습은 아직 시작 안 함**(M1부터 GCP). 현재 레포엔 RL 코드 없음 — `references/`(데이터→참조 파이프라인) + 검증 산출물뿐.
+- **단계: M0~M4 + G 전 단계 ✅ 완료. 파이프라인 닫힘.**
+- **핵심 결과(G 회귀)**: 20k 롤아웃 → 근육별 Fmax scale(s_F) 복원 **ACT만 평균 R² 0.90·KIN만 0.36·전체 0.92**, 공변량만 ≈0(누수없음). 전 채널 강식별(R² 0.80–0.97). DESIGN "ACT 주채널·KIN 보너스" 실증.
+- M1(정점98°)·M2(T1 peakErr3°·T2 5°)·M3(약화→ACT보상/KIN이탈 graded). 모델 `ppo_arm_{T1,M2a,M2b,M3a,M3b}.zip`·`regressor_G.pt`. 데이터 `data/sim/train.npz`.
+- crawl-walk warm-start: M1(T1고정)→M2a(T1분포)→M2b(+T2)→M3a(섭동k=1)→M3b(k≤3). obs 76 불변. 학습 이 머신(32코어) 직접.
+- 보고서 `PROGRESS_REPORT_2026-06-11.md` + 그림 `results/report/fig1~5`·비디오 `M1_T1.mp4`. 코드: `custom_envs/`·`train.py`·`diagnostics/{gate,signal}.py`·`gen_data.py`·`regress_nn.py`·`tools/`.
 - 핵심 결정 전부 LOCKED(DESIGN.md). 정체성: **근골격 파라미터(per-muscle Fmax/Lopt scale) 추정(회귀) 개발**. T1/T2는 *고정 입력*이지 식별성 끌어올리는 튜닝 손잡이가 아님. 목표 = sim 내부 식별성(sim-to-real 아님), 파라미터 ground truth는 sim 전용.
 
 ## 1. 이번 세션 한 일 (2026-06-11)
@@ -66,7 +69,58 @@ python -m references.warp              # 참조 단조성 selftest
 ```
 ※ `data/`(KIMHu ~1.5GB)는 **gitignore** — GCS/로컬서 별도 확보. `references/out/*`는 커밋돼 있어 데이터 없이 산출물 검토 가능.
 
-## 4. 다음 = M1 (★임계경로)
-- **만들 것:** `custom_envs/arm_perturb_v0.py` — myoArm 로드, 원위 37근 actuator 제거·손목/손가락 잠금(**행동공간 26근**), soft-tracking reward(곱셈형·양면 허용폭), `references.warp` 참조 통합, thoracohumeral→shoulder_elv **1:1** 좌표 보정.
-- **★건강 베이스라인 검증 게이트(M2 약화 전 선결):** 명목파라미터(s_F=s_L=1) 정책이 인간 템플릿 재현 — 정점 인간 91±11°내 · 단조상승(반전0) · 인간대역 속도 · 4–12Hz 떨림 없음 · 추종 RMS 허용내. **통과 못 하면 "이탈=신호" 전제 무효 → 진행 금지.** 실패시 escalation 사다리는 DESIGN.md "F 학습 로드맵".
-- 환경 코드는 **로컬 작성·로드/reset/step/reward 테스트 가능**, 학습만 GCP(Docker, 체크포인트→GCS; spot 회수=세션 죽음이므로 생존은 체크포인트+시작스크립트 책임, Claude는 모니터/디버그).
+## 4. M1 구현·통과 기록 (2026-06-11, ★임계경로 통과)
+
+### 구현 (신규 파일)
+| 파일 | 역할 |
+|---|---|
+| `custom_envs/muscle_groups.py` | 26 행동근(어깨15+팔꿈치9+PT/PQ) idx, 섭동 10채널(개별8+묶음A/B), 잠금 22관절, 추적 DoF 가중·밴드 |
+| `custom_envs/arm_perturb_v0.py` | **ArmPerturbEnv** — myoArm 로드, 원위 22관절 **MjSpec equality 상수잠금**, 행동공간 26근(나머지 ctrl=0), 곱셈형 soft-tracking reward(양면밴드), `warp` 참조 통합, RSI, 섭동 런타임 적용(gainprm/biasprm). anti-tremor 노브(act_lowpass/effort_pow/w_vel/댐핑배수) 내장(M1엔 전부 off). obs=76(q5·qd5·act26·ref4·err4·ahead4·phase2·latent5·perturb20·task1). |
+| `train.py` | PPO+VecNormalize+체크포인트+**학습중 게이트 콜백**. CAPS·anti-tremor·frame_skip 인자. |
+| `diagnostics/gate.py` | M1 5기준 게이트(정점/단조/속도/떨림/RMS). `--plot`. |
+| `caps_ppo.py` | CAPS 공간평활 PPO(백스톱; M1엔 불필요). |
+| `tools/inspect_*.py`, `verify_*.py` | 모델구조·근육·운동학·평면부호 검증 스크립트. |
+
+### 검증된 사실 (모델 실측)
+- **운동학 매핑 1:1 직접**: shoulder_elv qpos=거상각(rest offset 2.7°), elbow_flexion 0=신전, **elv_angle 부호=KIMHu plane_az 동일**(0=관상→+전방, M2 T2 스윕 정방향 확인). 부호반전 불필요.
+- **실현가능성**: DELT1+2+3+SUPSP로 팔 180°까지 거상 가능(95° 여유). 단 전체 26근 동시최대=48°(길항 동시수축) → 정책이 **선택활성** 학습 필요.
+- **섭동 런타임**: `gainprm/biasprm[ai,2]*=s_F`, `[ai,0:2]/=s_L` → 등척력 비율 정확히 s_F(검증). 재컴파일 불필요.
+- 학습 처리량: 단일 env 944 control-steps/s(50Hz), 20 envs ~6500 fps → **3M步 ~8분**.
+
+### ★게이트 버그 (중요 교훈 — 향후 반드시 주의)
+- **증상**: 게이트가 "4–12Hz 떨림 0.31, 진폭 6.4°" FAIL을 계속 보고. anti-tremor(leaky-integral·cubic effort·CAPS·댐핑×10)가 **전혀 효과 없음**(진폭 6.4→6.0). 실제 hold 궤적은 **완벽 매끈**(98.1→91.6 단조감쇠, 부호반전 3/69).
+- **진짜 원인**: `DummyVecEnv`는 `done` 시 **자동 리셋** → 롤아웃 루프가 step *후* 각도를 기록하면 마지막 done 스텝에 **리셋된 rest(≈0°) 샘플**이 섞임. 92°→0° 급강하 1샘플이 FFT에서 광대역 "떨림"으로 오독. (RMS는 elv−ref라 둘 다 0이라 무영향이었음 → 떨림만 오염.)
+- **수정**: 롤아웃을 **step 전(action 결정 시점) 기록**으로 변경(`gate.py`·`train.py` 콜백 둘 다). 수정 후 동일 1.5M 체크포인트가 떨림 0.05·진폭 0.43° = **PASS ✅**.
+- **교훈**: 자동리셋 VecEnv에서 에피소드 시계열을 모을 땐 post-done 샘플을 절대 포함하지 말 것. 떨림·jerk 등 *차분/스펙트럼* 지표는 경계 아티팩트에 극도로 민감.
+
+### 게이트 정교화 2 (반전 측정 — 미세 jitter 무시)
+- 2.5M 모델이 RMS 2.4°로 너무 정밀히 추종하자, 상승 중 **0.1° 수준 제어 jitter**가 "반전 2"로 오집계돼 단조성 FAIL. 실측: 최대 단일하강 0.11°, 총하강 0.73°(전체 95° 상승 중) = 거시적 완전 단조.
+- 수정: `_reversals`를 **데드밴드 기반**(running-max 대비 1.5°↑ 하강만 반전)으로 교체. 인간 템플릿(구성상 단조)과 의도 일치. 미세 jitter 면역.
+
+### M1 결론 (완료 ✅)
+- **plain PPO 베이스라인 보상**(곱셈형 soft-tracking, c_jerk 5e-6, c_dctrl 0.5, c_settle 1.0, w_effort 0.05, effort_pow 2)이 게이트 통과. anti-tremor 스택 불필요(유령이었음 — 측정버그). 노브(act_lowpass/CAPS/댐핑)는 M2/M3서 *진짜* 떨림 발생 시만.
+- 500k–1M에 정점 120–133° **오버슈트 transient** 후 1.5M 자가수정(원인: shoulder_elv 가중 0.15 낮아 초기엔 나머지 DoF 농락→racing). M2/M3는 warm-start로 이 transient 회피.
+- **공식 모델 `models/ppo_arm_T1.zip`(+`_vec.pkl`) 저장·플롯검증 완료**(3M步). 최종 게이트: 정점 97°·반전 0·속도 1.62s·떨림 진폭 0.12°·RMS 2.84° **PASS**. 플롯 `models/ppo_arm_T1_gate.png`: 매끈한 거상+hold, shoulder_rot −60° 외회전(물리 공급, 의도대로).
+- 게이트 상대모드 추가: `--sample-latent`(M2 분포) 시 G1=참조정점 매칭(|달성−참조|<12°), 속도밴드 확대. M1은 절대밴드 유지.
+
+## 5. M2 기록 (latent 분포 + T2, 완료 ✅)
+- **M2a**(T1 분포, M1 warm-start, 2.5M步): 분포 상대게이트 PASS(peakErr 10.2°·RMS 7.2°). ref_peak↔달성 상관 **0.91** = 정책이 latent 활용 확인. `models/ppo_arm_M2a.zip`.
+- **M2b**(T1+T2 mix, M2a warm-start, 4M步): T1·T2 분포게이트 둘 다 PASS(T1 peakErr 3.0°·RMS 5.2° / T2 peakErr 5.2°·RMS 6.8°). T2 전방평면 스윕 빠르게 습득(1M부터 통과). `models/ppo_arm_M2b.zip` = **M3 시작점**.
+- env 확장: `task='mix'`(에피소드마다 T1/T2 랜덤), `set_eval(sample_latent=True)`(분포평가), 게이트 상대모드(참조정점 매칭).
+- 교훈: soft밴드 ±10°라 healthy 추적도 ±3–7° 슬롭(설계 의도). 식별은 ACT 주채널이라 OK. 중앙값-latent 절대게이트(콜백)는 살짝 오버슈트(104°) 보이나 분포 상대게이트가 진짜 지표.
+
+## 6. M3 (섭동 커리큘럼, 완료 ✅)
+- **M3a**(k=1, M2b 워밍스타트, 4M) → **M3b**(k≤3, M3a 워밍스타트, 4M). 둘 다 healthy 게이트 유지. `models/ppo_arm_M3{a,b}.zip`.
+- **방법**: `train.py --task mix --latent-mode sample --perturb --curriculum-k 1[,2,3] --curriculum-w ... --resume <prev>`.
+- 섭동 20-dim(s_F·s_L 10채널)이 obs(55:74)에 포함 → 정책이 privileged로 약화 알고 보상. 런타임 gainprm/biasprm 편집(`_write_perturb_to_model`).
+- **신호 진단**(`diagnostics/signal.py`): 약화→KIN(정점미달·회전이탈)/ACT(보상) 검증. 건강 M2a 프리뷰 실측: DELT2 약화→19° 미달, **A_lowcuff(회전근개)→회전 66° 이탈**(DESIGN "cuff=회전신호" 확증), SUPSP→ACT 대폭보상. 근육별 뚜렷한 신호.
+- **주의(VecNorm)**: M2b vecnorm은 섭동 obs(55:74)가 항상 1.0이라 분산~0 → M3서 섭동 시작 시 정규화 일시 클립(−10). VecNorm이 적응하며 회복(클립이 폭주 방지). 콜백 게이트는 healthy(섭동off) 추적 모니터.
+- M3 성공기준(DESIGN): 약화→신호 발생 + 정책이 가능한 보상. 게이트 아닌 **신호 스캔으로 판정**.
+
+## 7. M4 + G (완료 ✅)
+- **M4**(`gen_data.py` + `tools/concat_shards.py`): M3b 정책으로 20 병렬샤드×1000=**20k 롤아웃**(k∈{0,1,2,3}×latent×T1/T2) → 특징 143(ACT 63근 mean/max + 운동학 11 + latent/task 6) + 라벨(s_F·s_L 20). `data/sim/train.npz`.
+- **G**(`regress_nn.py`): FUSED-MLP(LayerNorm·약화 재가중) 15% 홀드아웃. **결과**: s_F 복원 ACT만 R²0.90·KIN만 0.36·전체 0.92, s_L R²0.75–0.86, 공변량만 ≈0. ablation `--features act|kin|actkin`. `models/regressor_G.pt`.
+- **그림**(`tools/make_report_figs.py`·`fig_identifiability.py`): fig1 추적갤러리·fig2 latent활용·fig3 섭동신호·fig4 학습곡선·fig5 식별성R². **비디오**(`tools/render_episode.py`, MUJOCO_GL=osmesa): `M1_T1.mp4`.
+
+## 8. 후속 가능(선택)
+- 학습분포 밖 일반화·미지 정책 식별성, 2채널 EMG 제약판 천장, 회전근개 개별분해 degeneracy 정량, s_L 개선, latent별 층화.

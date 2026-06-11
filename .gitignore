@@ -18,3 +18,12 @@ __pycache__/
 
 # Claude Code 로컬 설정
 .claude/
+
+# 보고서 이미지/비디오 — 사용자 요청으로 제외(MD 본문은 커밋)
+results/report/
+
+# 중간 체크포인트(대용량) — 최종 모델만 force-add로 커밋
+models/checkpoints/
+
+# MuJoCo 렌더 로그
+MUJOCO_LOG.TXT
