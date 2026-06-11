@@ -24,19 +24,24 @@ from custom_envs import muscle_groups as MG
 CH = [c for c, _ in MG.PERTURB_CHANNELS]
 # 채널 블록: act63 pos5 vel5 err4
 BLK = {"act": slice(0, 63), "pos": slice(63, 68), "vel": slice(68, 73), "err": slice(73, 77)}
+# 표면 EMG 접근 가능근(actuator idx) — 심부근(회전근개 SUPSP/INFSP/SUBSC/TMIN, CORB,
+# TRImed, SUP, BRA) 제외. 현실적 제한 관측 시나리오.
+SURF_ACT = [0, 1, 2, 8, 9, 10, 11, 12, 13, 15, 16, 20, 21, 23]   # DELT/PECM/LAT/TRIlong·lat/BIC/BRD
 
 
 def select_channels(seq, channels):
-    """channels: 'all' | 'act' | 'kin'(pos+vel+err) | 'act+err' 등."""
+    """channels: 'all'|'act'|'kin'|'surf'(표면EMG)|'surf+kin'(현실적 제한관측) 등."""
     if channels == "all":
         return seq
     parts = []
     for p in channels.split("+"):
         if p == "kin":
-            parts += [BLK["pos"], BLK["vel"], BLK["err"]]
+            parts.append(seq[:, :, 63:77])
+        elif p == "surf":
+            parts.append(seq[:, :, SURF_ACT])
         else:
-            parts.append(BLK[p])
-    return np.concatenate([seq[:, :, s] for s in parts], axis=2)
+            parts.append(seq[:, :, BLK[p]])
+    return np.concatenate(parts, axis=2)
 
 
 class TCN(nn.Module):

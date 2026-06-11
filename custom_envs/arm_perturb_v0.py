@@ -77,8 +77,12 @@ class ArmPerturbEnv(gym.Env):
                  horizon_s=3.5, frame_skip=10, rsi=True, seed=None,
                  curriculum_k=(1, 2, 3), curriculum_k_weights=(0.5, 0.3, 0.2),
                  reward_cfg=None, xml=None, act_lowpass=0.0, effort_pow=2,
-                 joint_damping_mult=1.0, armature_mult=1.0):
+                 joint_damping_mult=1.0, armature_mult=1.0,
+                 motor_noise=0.0, motor_noise_floor=0.01):
         super().__init__()
+        # 신호의존 운동노이즈(Harris&Wolpert 1998): SD ∝ 명령크기 → 현실적 변동·동시수축
+        self.motor_noise = float(motor_noise)
+        self.motor_noise_floor = float(motor_noise_floor)
         self.task_mode = task               # 'T1' | 'T2' | 'mix'
         self.tasks = ["T1", "T2"] if task == "mix" else [task]
         self.task = self.tasks[0]           # 현재 에피소드 task(reset서 갱신)
@@ -253,6 +257,9 @@ class ArmPerturbEnv(gym.Env):
     def step(self, action):
         action = np.clip(action, -1.0, 1.0)
         u = 0.5 * (action + 1.0)                        # [-1,1]→[0,1] 근육 활성
+        if self.motor_noise > 0.0:                      # 신호의존 운동노이즈(SD∝u)
+            sd = self.motor_noise * u + self.motor_noise_floor
+            u = np.clip(u + self.rng.normal(0.0, sd), 0.0, 1.0)
         if self.act_lowpass > 0.0:                      # 누설적분(anti-tremor)
             a_prev = self._ctrl_prev[self.action_idx]
             u = (1 - self.act_lowpass) * a_prev + self.act_lowpass * u

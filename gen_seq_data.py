@@ -39,7 +39,8 @@ def _step_feat(raw):
 
 
 def generate(model_path, vec_path, task="mix", n=1000, seed=0,
-             curriculum_k=(0, 1, 2, 3), curriculum_w=(0.15, 0.45, 0.25, 0.15)):
+             curriculum_k=(0, 1, 2, 3), curriculum_w=(0.15, 0.45, 0.25, 0.15),
+             motor_noise=0.0, emg_noise=0.0, kin_noise=0.0):
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
@@ -49,7 +50,8 @@ def generate(model_path, vec_path, task="mix", n=1000, seed=0,
 
     def mk():
         return ArmPerturbEnv(task=task, latent_mode="sample", perturb=True, rsi=False,
-                             seed=seed, curriculum_k=tuple(ks), curriculum_k_weights=tuple(kw))
+                             seed=seed, curriculum_k=tuple(ks), curriculum_k_weights=tuple(kw),
+                             motor_noise=motor_noise)
     venv = DummyVecEnv([mk])
     venv = VecNormalize.load(vec_path, venv); venv.training = False; venv.norm_reward = False
     raw = venv.venv.envs[0]
@@ -74,6 +76,10 @@ def generate(model_path, vec_path, task="mix", n=1000, seed=0,
             a, _ = model.predict(obs, deterministic=True)
             obs, _, d, _ = venv.step(a); done = d[0]
         arr = np.array(steps, np.float32)            # (L, 77)
+        if emg_noise > 0:                            # EMG 측정노이즈(가법)
+            arr[:, :C_ACT] += rng.normal(0, emg_noise, arr[:, :C_ACT].shape)
+        if kin_noise > 0:                            # 운동학 센서노이즈(rad)
+            arr[:, C_ACT:] += rng.normal(0, kin_noise, arr[:, C_ACT:].shape)
         L = len(arr)
         pad = np.zeros((Tmax, C), np.float32)
         pad[:L] = arr[:Tmax]
@@ -91,10 +97,15 @@ def main():
     ap.add_argument("--model", required=True); ap.add_argument("--vecnorm", required=True)
     ap.add_argument("--task", default="mix"); ap.add_argument("--n", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--motor-noise", type=float, default=0.0)   # 운동노이즈 σ_sd
+    ap.add_argument("--emg-noise", type=float, default=0.0)     # EMG 측정노이즈
+    ap.add_argument("--kin-noise", type=float, default=0.0)     # 운동학 센서노이즈(rad)
     ap.add_argument("--out", default="data/seq/shard.npz")
     a = ap.parse_args()
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
-    seq, ln, cov, ysF, ysL = generate(a.model, a.vecnorm, task=a.task, n=a.n, seed=a.seed)
+    seq, ln, cov, ysF, ysL = generate(a.model, a.vecnorm, task=a.task, n=a.n, seed=a.seed,
+                                      motor_noise=a.motor_noise, emg_noise=a.emg_noise,
+                                      kin_noise=a.kin_noise)
     np.savez_compressed(a.out, seq=seq, length=ln, cov=cov, y_sF=ysF, y_sL=ysL,
                         channel_names=np.array(
                             [f"act_{i}" for i in range(63)]

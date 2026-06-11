@@ -23,14 +23,14 @@ CKPT = os.path.join(MODELS, "checkpoints")
 
 def make_env_fn(task, latent_mode, perturb, rsi, seed, act_lowpass=0.0,
                 effort_pow=2, reward_cfg=None, frame_skip=10,
-                curriculum_k=(1, 2, 3), curriculum_w=(0.5, 0.3, 0.2)):
+                curriculum_k=(1, 2, 3), curriculum_w=(0.5, 0.3, 0.2), motor_noise=0.0):
     def _f():
         from custom_envs.arm_perturb_v0 import ArmPerturbEnv
         e = ArmPerturbEnv(task=task, latent_mode=latent_mode, perturb=perturb,
                           rsi=rsi, seed=seed, act_lowpass=act_lowpass,
                           effort_pow=effort_pow, reward_cfg=reward_cfg,
                           frame_skip=frame_skip, curriculum_k=curriculum_k,
-                          curriculum_k_weights=curriculum_w)
+                          curriculum_k_weights=curriculum_w, motor_noise=motor_noise)
         return e
     return _f
 
@@ -143,6 +143,7 @@ def main():
     ap.add_argument("--frame-skip", type=int, default=10)       # 10=50Hz, 20=25Hz
     ap.add_argument("--curriculum-k", default="1,2,3")          # M3 손상근 수 후보
     ap.add_argument("--curriculum-w", default="0.5,0.3,0.2")    # 가중
+    ap.add_argument("--motor-noise", type=float, default=0.0)   # 신호의존 운동노이즈 σ_sd
     a = ap.parse_args()
     cur_k = tuple(int(x) for x in a.curriculum_k.split(","))
     cur_w = tuple(float(x) for x in a.curriculum_w.split(","))
@@ -159,7 +160,7 @@ def main():
     env_fns = [make_env_fn(a.task, a.latent_mode, a.perturb, True, a.seed + i,
                            act_lowpass=a.act_lowpass, effort_pow=a.effort_pow,
                            reward_cfg=reward_cfg, frame_skip=a.frame_skip,
-                           curriculum_k=cur_k, curriculum_w=cur_w)
+                           curriculum_k=cur_k, curriculum_w=cur_w, motor_noise=a.motor_noise)
                for i in range(a.n_envs)]
     venv = SubprocVecEnv(env_fns, start_method="spawn")
     if a.vecnorm and os.path.exists(a.vecnorm):
