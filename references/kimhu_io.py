@@ -65,14 +65,16 @@ def _unit(v):
     return v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)
 
 
-def _roll_about(axis, vec, ref):
-    """vec를 axis 둘레로 굴린 각도(ref를 0으로). pro_sup·평면 회전용. unwrap된 deg."""
+def _roll_about(axis, vec, ref, unwrap=True):
+    """vec를 axis 둘레로 굴린 각도(ref를 0으로). unwrap=False면 ±180° 경계(손목용:
+    noisy 신호 unwrap 누적 폭주 방지)."""
     u = _unit(axis)
     vp = _unit(vec - np.sum(vec * u, 1, keepdims=True) * u)
     rp = _unit(ref - np.sum(ref * u, 1, keepdims=True) * u)
     s = np.sum(np.cross(rp, vp) * u, 1)
     c = np.sum(rp * vp, 1)
-    return np.degrees(np.unwrap(np.arctan2(s, c)))
+    ang = np.arctan2(s, c)
+    return np.degrees(np.unwrap(ang) if unwrap else ang)
 
 
 def derive_channels(frames):
@@ -111,6 +113,15 @@ def derive_channels(frames):
     pn = np.cross(tip - wri, thb - wri)   # 손바닥 법선
     pro_sup = _roll_about(fa, pn, down)
 
+    # 손목 굴곡/편위(full sequence·손목해제용). 손벡터(손목→손끝)를 전완 기준으로 분해.
+    #  flex_axis=radioulnar(전완⊥손바닥법선) 둘레 = 굴곡, dev_axis 둘레 = 편위.
+    #  ※ Kinect 손 추적 noisy → 저신뢰(DESIGN: 손목조작 구간은 본래 오염 영역).
+    hd = tip - wri
+    flex_axis = np.cross(fa, pn)
+    dev_axis = np.cross(fa, flex_axis)
+    wrist_flex = _roll_about(flex_axis, hd, fa, unwrap=False)
+    wrist_dev = _roll_about(dev_axis, hd, fa, unwrap=False)
+
     # 평면 방위각: 위팔 수평성분을 (측면, 전방) 기저로. 0=관상(측면), +=전방(시상쪽).
     # ※ 팔이 수직에 가까우면 수평성분이 작아 방위각이 노이즈 → plane_mag로 가중해 쓸 것.
     d = _unit(down)
@@ -133,6 +144,8 @@ def derive_channels(frames):
         "pro_sup": pro_sup,
         "plane_az": plane_az,
         "plane_mag": plane_mag,
+        "wrist_flex": wrist_flex,
+        "wrist_dev": wrist_dev,
         "track_shoulder": _track(frames, "ShoulderRight"),
     }
 
