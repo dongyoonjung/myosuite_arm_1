@@ -25,6 +25,7 @@ from gymnasium import spaces
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from references import warp
 from references import vae_ref
+from references import fpca_ref
 from custom_envs import muscle_groups as MG
 
 XML_DEFAULT = os.path.join(
@@ -84,8 +85,8 @@ class ArmPerturbEnv(gym.Env):
         # 신호의존 운동노이즈(Harris&Wolpert 1998): SD ∝ 명령크기 → 현실적 변동·동시수축
         self.motor_noise = float(motor_noise)
         self.motor_noise_floor = float(motor_noise_floor)
-        # 참조 생성기: 'warp'(평균+4latent) | 'vae'(KIMHu 궤적 VAE 생성모델)
-        self._refmod = vae_ref if ref_gen == "vae" else warp
+        # 참조 생성기: 'warp'(평균+4latent) | 'vae'(VAE) | 'fpca'(fPCA/ProMP, 권장)
+        self._refmod = {"vae": vae_ref, "fpca": fpca_ref}.get(ref_gen, warp)
         self.ref_gen = ref_gen
         self.task_mode = task               # 'T1' | 'T2' | 'mix'
         self.tasks = ["T1", "T2"] if task == "mix" else [task]
@@ -148,8 +149,8 @@ class ArmPerturbEnv(gym.Env):
 
     # ---- 라텐트/참조 ----
     def _median_latent(self, task):
-        if self.ref_gen == "vae":
-            return vae_ref.median_latent(task)
+        if self.ref_gen in ("vae", "fpca"):
+            return self._refmod.median_latent(task)
         import json
         with open(os.path.join(os.path.dirname(warp.__file__), "out",
                                f"latent_{task}.json")) as fh:
